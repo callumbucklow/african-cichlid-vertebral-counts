@@ -1,0 +1,378 @@
+---
+title: "Data Processing and Distribution Visualisation"
+author: "Callum Bucklow"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r Setup, include=FALSE}
+knitr::opts_chunk$set(message = FALSE) ##Remove messages for all chunks
+knitr::opts_chunk$set(warning = FALSE) ##Remove warnings for all chunks
+```
+
+```{r Libraries}
+# Load the necessary libraries
+library(tidyverse) #data wrangling
+library(tidyr) #data wrangling
+library(dplyr)
+library(ggplot2) #for plotting when I don't want to use Base R
+library(gridExtra) #for ggplot, to plot multiple plots together
+library(fitdistrplus) #for fitting distributions to data
+```
+
+```{r Bartlett ANOVA Tukey or Games Howell Function}
+
+##the following function will determine a suitable test of variance and post-hoc test as determined by the result of an test of equal (or unequal) variance. Data is input into the function, a bartlett test is performed to determine whether the data has equal variances (null hypothesis is equal variance) and either performs a one-way ANOVA assuming equal or unequal variances. If variances are equal group differences are calculated using Tukey's honestly significant difference or if variances are unequal a Games-Howell test, both use a confidence level of 95%.
+
+##suggested usage:
+
+#bartlett_ANOVA_posthoc(data_frame, 'response', 'factor')
+#e.g. bartlett_ANOVA_posthoc(summary_data_transformed, 'total_count', 'water_system')
+
+bartlett_ANOVA_posthoc <- function(data, response, factor) {
+  
+  data <- as.data.frame(data)
+  
+  # Perform the Bartlett test to check for equal variances
+  bartlett_test <- bartlett.test(data[, response] ~ data[, factor])
+  
+  # Determine which type of ANOVA to perform based on the Bartlett test result
+  if (bartlett_test$p.value >= 0.05) {
+    # Equal variances assumed
+    aov_result <- oneway.test(data[, response] ~ data[, factor], data)
+    posthoc_test <- TukeyHSD(aov_result, conf.level = 0.95)
+  } else {
+    # Unequal variances
+    aov_result <- oneway.test(data[, response] ~ data[, factor], data, var.equal = FALSE)
+    posthoc_test <- rstatix::games_howell_test(data = data, formula = as.formula(paste(response, '~', factor)), conf.level = 0.95, detailed = TRUE)
+  }
+  
+  # Print the summary of the ANOVA result
+  print(summary(aov_result))
+  
+  # Extract the p-value for the main effect
+  main_effect_pvalue <- tryCatch({
+    aov_result$p.value
+  }, error = function(e) {
+    NA
+  })
+  
+  # Print the results
+if (!is.na(main_effect_pvalue) && length(main_effect_pvalue) == 1) {
+  if (main_effect_pvalue <= 0.05) {
+    cat('There is a significant main effect of', factor, 'on', response, '\n\n')
+  } else {
+    cat('There is not a significant main effect of', factor, 'on', response, '\n\n')
+  }
+  
+  # Print post-hoc test results in both cases
+  print(posthoc_test)
+  } else {
+  cat('Error: Unable to determine the main effect p-value.')
+  }
+}
+
+```
+
+# Data Input
+```{r Import the Vertebral Count Data}
+
+## This is importing the vertebral count data that includes species from every tribe within Pseudocrenilabrinae (Family: Cichlidae)
+
+# Read in the data
+vertebral_counts <- read.csv('Data/vertebral_counts_master.csv')
+
+#check the colnames
+colnames(vertebral_counts)
+
+#check the data:
+head(vertebral_counts)
+```
+
+```{r Raw Species Means}
+#Collapse the vertebral counts data into per species mean
+#note we are not transforming the data here
+
+#calculate the raw pc:c ratio
+vertebral_counts_individuals <-
+  vertebral_counts %>%
+  mutate(pc_to_c_ratio = (precaudal_count)/(caudal_count))
+
+#note that we are filtering out water_body; I don't think it is very informative
+vertebral_counts_species <- vertebral_counts_individuals %>% 
+  group_by(species_name, genus, tribe, haplochromine, water_system, lm_ecology, mouthbrooder, depth, piscivore) %>% 
+  summarize(
+    precaudal_count = mean(precaudal_count),
+    caudal_count = mean(caudal_count),
+    total_count = mean(total_count),
+    pc_to_c_ratio = mean(pc_to_c_ratio, na.rm = TRUE),
+    aspect_ratio = mean(aspect_ratio, na.rm = TRUE),
+    ln_length_ln_width = mean(ln_length_ln_width, na.rm=TRUE),
+    ln_ant_length_ln_width = mean(ln_ant_length_ln_width, na.rm=TRUE),
+    ln_post_length_ln_width = mean(ln_post_length_ln_width, na.rm=TRUE),
+    n_count = n()
+  )
+```
+
+```{r Checking for Duplicate Species Names}
+duplicate_species <- 
+  vertebral_counts_species[duplicated(vertebral_counts_species$species_name), ]
+
+if (nrow(duplicate_species) > 0) {
+  print("Duplicate Entries Present!")
+} else {
+  print("No Duplicates Present!")
+}
+
+```
+
+```{r Testing Mean Differences between Water Systems}
+
+bartlett_ANOVA_posthoc(vertebral_counts_species, 
+                       'total_count', 'water_system')
+
+bartlett_ANOVA_posthoc(vertebral_counts_species, 
+                       'pc_to_c_ratio', 'water_system')
+
+bartlett_ANOVA_posthoc(vertebral_counts_species, 
+                       'ln_length_ln_width', 'water_system')
+
+```
+
+
+```{r Testing Fit of Distribution Type to Counts (Species Means -- Continous)}
+
+#We are using the fitdistrplus package to test the fit of various distributions to the total counts
+
+total_counts <- vertebral_counts_species$total_count
+  
+#Plot Cullen and Frey Graph to determine which distribution may fit best 
+descdist(total_counts, discrete=FALSE, boot=1000)
+
+##note following requires fitdistrplus package
+
+#Fit normal, log-normal and gamma distribution to untransformed mean species counts
+fn <- fitdist(total_counts, "norm")
+fln <- fitdist(total_counts, "lnorm")
+fg <- fitdist(total_counts, "gamma")
+
+#arrange into list to make plotting easier
+f_list <- list(fn, fln, fg)
+
+par(mfrow = c(2, 2))##arrange into 2x2 grid
+plot.legend <- sapply(c(1:length(f_list)), function(x) f_list[[x]]$distname)
+denscomp(f_list, legendtext = plot.legend) #compare densities
+qqcomp(f_list, legendtext = plot.legend) #compare Q-Q distributions
+cdfcomp(f_list, legendtext = plot.legend) #compare CDF intervals
+ppcomp(f_list, legendtext = plot.legend) #compare probabalities
+
+#replot comparison of densities for each model against data
+par(mfrow = c(1, 1))
+denscomp(list(fn, fln, fg), legendtext = c("normal", "lognorm", "gamma")) 
+
+#Compare summary stats for the fit of the three different models
+gofstat(list(fn, fln, fg))
+```
+
+```{r Testing Fit of Distribution Type to Body Aspect Ratio (Species Means -- Continous)}
+
+#We are using the fitdistrplus package to test the fit of various distributions to the total counts
+
+body_aspect_ratios <- vertebral_counts_species$aspect_ratio
+
+# Identify positions of NaN values
+nan_indices <- which(is.nan(body_aspect_ratios))
+
+# Remove NaN values from the vector
+body_aspect_ratios <- body_aspect_ratios[-nan_indices]
+
+#Plot Cullen and Frey Graph to determine which distribution may fit best 
+descdist(body_aspect_ratios, discrete=FALSE, boot=1000)
+
+##note following requires fitdistrplus package
+
+#Fit normal, log-normal and gamma distribution to untransformed mean species counts
+fn <- fitdist(body_aspect_ratios, "norm")
+fln <- fitdist(body_aspect_ratios, "lnorm")
+fg <- fitdist(body_aspect_ratios, "gamma")
+
+#arrange into list to make plotting easier
+f_list <- list(fn, fln, fg)
+
+par(mfrow = c(2, 2))##arrange into 2x2 grid
+plot.legend <- sapply(c(1:length(f_list)), function(x) f_list[[x]]$distname)
+denscomp(f_list, legendtext = plot.legend) #compare densities
+qqcomp(f_list, legendtext = plot.legend) #compare Q-Q distributions
+cdfcomp(f_list, legendtext = plot.legend) #compare CDF intervals
+ppcomp(f_list, legendtext = plot.legend) #compare probabalities
+
+#replot comparison of densities for each model against data
+par(mfrow = c(1, 1))
+denscomp(list(fn, fln, fg), legendtext = c("normal", "lognorm", "gamma")) 
+
+#Compare summary stats for the fit of the three different models
+gofstat(list(fn, fln, fg))
+```
+
+```{r Testing Fit of Distribution Type to Ln[Length] - ln[Width] (Species Means -- Continous)}
+
+#We are using the fitdistrplus package to test the fit of various distributions to the total counts
+
+ln_length_ln_width <- vertebral_counts_species$ln_length_ln_width
+
+# Identify positions of NaN values
+nan_indices <- which(is.nan(ln_length_ln_width))
+
+# Remove NaN values from the vector
+ln_length_ln_width <- ln_length_ln_width[-nan_indices]
+
+#Plot Cullen and Frey Graph to determine which distribution may fit best 
+descdist(ln_length_ln_width, discrete=FALSE, boot=1000)
+
+##note following requires fitdistrplus package
+
+#Fit normal, log-normal and gamma distribution to untransformed mean species counts
+fn <- fitdist(ln_length_ln_width, "norm")
+fln <- fitdist(ln_length_ln_width, "lnorm")
+fg <- fitdist(ln_length_ln_width, "gamma")
+
+#arrange into list to make plotting easier
+f_list <- list(fn, fln, fg)
+
+par(mfrow = c(2, 2))##arrange into 2x2 grid
+plot.legend <- sapply(c(1:length(f_list)), function(x) f_list[[x]]$distname)
+denscomp(f_list, legendtext = plot.legend) #compare densities
+qqcomp(f_list, legendtext = plot.legend) #compare Q-Q distributions
+cdfcomp(f_list, legendtext = plot.legend) #compare CDF intervals
+ppcomp(f_list, legendtext = plot.legend) #compare probabalities
+
+#replot comparison of densities for each model against data
+par(mfrow = c(1, 1))
+denscomp(list(fn, fln, fg), legendtext = c("normal", "lognorm", "gamma")) 
+
+#Compare summary stats for the fit of the three different models
+gofstat(list(fn, fln, fg))
+```
+
+
+```{r Log Transformed Species Means}
+#Collapse the vertebral counts data into per species mean
+
+#note that we are filtering out water_body; I don't think it is very informative
+#not transforming aspect ratio of residual sum of squares of curves
+#transforming using the natural logarithm
+vertebral_counts_species_transformed <- vertebral_counts %>% 
+  group_by(species_name, genus, tribe, haplochromine, water_system, lm_ecology, mouthbrooder, depth, piscivore) %>% 
+  summarize(
+    precaudal_count = mean(log(precaudal_count)),
+    caudal_count = mean(log(caudal_count)),
+    total_count = mean(log(total_count)),
+    ln_pc_ln_c = mean(precaudal_count - caudal_count, na.rm = TRUE), #ln(precaudal) - ln(caudal)
+    aspect_ratio = mean(aspect_ratio, na.rm = TRUE),
+    ln_length_ln_width = mean(ln_length_ln_width, na.rm = TRUE),
+    ln_ant_length_ln_width = mean(ln_ant_length_ln_width, na.rm=TRUE),
+    ln_post_length_ln_width = mean(ln_post_length_ln_width, na.rm=TRUE),
+    n_count = n()
+  )
+```
+
+```{r Species Grand Summary Table}
+species_grand_summary_table <- 
+  vertebral_counts_species_transformed %>%
+  ungroup() %>%
+  summarise(
+  mean_total_count = mean(total_count, na.rm = TRUE),
+  total_count_sd = sd(total_count, na.rm = TRUE),
+  mean_precaudal_count = mean(precaudal_count, na.rm = TRUE),
+  precaudal_count_sd = sd(precaudal_count, na.rm = TRUE),
+  caudal_count_mean = mean(caudal_count, na.rm = TRUE),
+  caudal_count_sd = sd(caudal_count, na.rm = TRUE),
+  ln_pc_ln_c_mean = mean(ln_pc_ln_c, na.rm = TRUE),
+  ln_pc_ln_c_sd = sd(ln_pc_ln_c, na.rm = TRUE),
+  mean_aspect_ratio = mean(aspect_ratio, na.rm = TRUE),
+  aspect_ratio_sd = sd(aspect_ratio, na.rm = TRUE),
+  mean_ln_length_ln_width = mean(ln_length_ln_width, na.rm = TRUE),
+  ln_length_ln_width_sd = sd(ln_length_ln_width, na.rm=TRUE),
+  mean_ln_ant_length_ln_width = mean(ln_ant_length_ln_width, na.rm = TRUE),
+  ln_ant_length_ln_width_sd = sd(ln_ant_length_ln_width, na.rm=TRUE),
+  mean_ln_post_length_ln_width = mean(ln_post_length_ln_width, na.rm = TRUE),
+  ln_post_length_ln_width_sd = sd(ln_post_length_ln_width, na.rm=TRUE),
+  n_count = n()
+  )
+
+write.csv(species_grand_summary_table, "Data/species_grand_summary_table.csv")
+```
+
+```{r Plot the Distributions of Log-transformed Counts}
+
+total_count_distribution <- 
+  ggplot(vertebral_counts_species_transformed, aes(x=total_count))+
+  geom_histogram(binwidth = 0.05, colour='black')+
+  geom_vline(xintercept = species_grand_summary_table$mean_total_count, colour = "red", linetype = "dashed", linewidth = 0.75) +
+  geom_vline(xintercept = species_grand_summary_table$mean_total_count + species_grand_summary_table$total_count_sd, colour = "blue", linetype = "dashed", linewidth = 0.75) +
+  geom_vline(xintercept = species_grand_summary_table$mean_total_count - species_grand_summary_table$total_count_sd, colour = "blue", linetype = "dashed", linewidth = 0.75) +
+  xlab("Mean ln[Total Count]")+
+  ylab("Count")+
+  theme_classic()+
+  theme(legend.position='none',
+                 axis.text = element_text(size=12),
+                 axis.title = element_text(size=12, face='bold'))
+total_count_distribution
+ggsave("Figures/Data Processing and Distributions/total_count_distributions.pdf", total_count_distribution, width = 12, height = 10, units = "cm")
+
+precaudal_count_distribution <- 
+  ggplot(vertebral_counts_species_transformed, aes(x=precaudal_count))+
+  geom_histogram(binwidth = 0.05)+
+  geom_vline(xintercept = species_grand_summary_table$mean_precaudal_count, colour = "purple", linetype = "dashed", linewidth = 0.75) +
+  xlab("Mean ln[Precaudal Count]")+
+  ylab("Count")+
+  theme_bw()
+
+caudal_count_distribution <- 
+  ggplot(vertebral_counts_species_transformed, aes(x=caudal_count))+
+  geom_histogram(binwidth = 0.05)+
+  geom_vline(xintercept = species_grand_summary_table$caudal_count_mean, colour = "purple", linetype = "dashed", linewidth = 0.75) +
+  xlab("Mean ln[Caudal Count]")+
+  ylab("Count")+
+  theme_bw()
+
+precaudal_caudal_ratio_distribution <- 
+  ggplot(vertebral_counts_species_transformed, aes(x=ln_pc_ln_c))+
+  geom_histogram(binwidth = 0.05)+
+  geom_vline(xintercept = 0.00, colour = "black", linetype = "dashed", linewidth = 0.75) +
+  geom_vline(xintercept = species_grand_summary_table$ln_pc_ln_c_mean, colour = "purple", linetype = "dashed", linewidth = 0.75) +
+  xlab("Mean (ln[Precaudal] - ln[Caudal])")+
+  ylab("Count")+
+  theme_bw()
+
+body_aspect_ratio_distribution <- 
+  ggplot(vertebral_counts_species_transformed, aes(x=aspect_ratio))+
+  geom_histogram(binwidth = 0.25, colour='black')+
+  geom_vline(xintercept = species_grand_summary_table$mean_aspect_ratio, colour = "red", linetype = "dashed", linewidth = 0.75)+
+  geom_vline(xintercept = species_grand_summary_table$mean_aspect_ratio + species_grand_summary_table$aspect_ratio_sd, colour = "blue", linetype = "dashed", linewidth = 0.75) +
+  geom_vline(xintercept = species_grand_summary_table$mean_aspect_ratio - species_grand_summary_table$aspect_ratio_sd, colour = "blue", linetype = "dashed", linewidth = 0.75) +
+  xlab("Mean Body Aspect Ratio")+
+  ylab("Count")+
+  theme_classic()+
+  theme(legend.position='none',
+                 axis.text = element_text(size=12),
+                 axis.title = element_text(size=12, face='bold'))
+body_aspect_ratio_distribution
+ggsave("Figures/Data Processing and Distributions/body_aspect_ratio_distribution.pdf", body_aspect_ratio_distribution, width = 12, height = 10, units = "cm")
+
+
+count_distributions <- grid.arrange(total_count_distribution, precaudal_caudal_ratio_distribution, 
+             precaudal_count_distribution, caudal_count_distribution, body_aspect_ratio_distribution,
+             nrow = 3)
+
+ggsave("Figures/Data Processing and Distributions/count_ratio_distributions.pdf", count_distributions, width = 21.00, height = 29.70, units = "cm")
+
+```
+
+```{r Export the Transformed Data}
+
+write.csv(vertebral_counts_species_transformed, 
+          "Data/vertebral_counts_species_transformed.csv")
+```
+
+

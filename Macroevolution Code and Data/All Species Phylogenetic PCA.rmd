@@ -1,0 +1,720 @@
+---
+title: "All Species Phylogenetic PCA"
+author: "Callum Bucklow"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r Setup, include=FALSE}
+knitr::opts_chunk$set(message = FALSE) ##Remove messages for all chunks
+knitr::opts_chunk$set(warning = FALSE) ##Remove warnings for all chunks
+```
+
+```{r Libraries}
+# Load the necessary libraries
+library(tidyverse) #data wrangling
+library(tidyr) #data wrangling
+library(dplyr)
+library(viridis) #colour scale for heat maps
+library(ggplot2) #for plotting when I don't want to use Base R
+library(gridExtra) #for ggplot, to plot multiple plots together
+library(fitdistrplus) #for fitting distributions to data
+library(ape) #for phylogeny manipulation and all the rest
+library(phytools) #for various things, including phylogenetic PCA, PGLM etc.
+library(nlme) #for pgls
+library(geiger) #for fitting trait evolution models to phylogenies
+library(OUwie) #for fitting multiple regime OU models to trait evolution models
+library(caper) #for pgls and will report pseudo-r2 for these models
+```
+
+# Defined Functions for Analysis
+
+```{r Basic Tree Check Function, echo=FALSE}
+
+#Here we are defining a basic function that checks whether an inputted phylogenetic tree is: 
+#1) rooted,
+#2) birfurcated (binary) and,
+#3) ultrametric
+
+#It uses basic functions in ape to test these properties and outputs a dataframe of the results.
+
+#A rooted tree is considered binary if all nodes (including the root node) have exactly two descendant nodes and an ultrametric tree is one which is time-calibrated (dendogram), or more specifically, a rooted tree with edge lengths where all tips are equidistant from the root
+
+
+#suggested usage: basic_tree_check(tree)
+
+basic_tree_check <- 
+  function(tree) {
+  # Create an empty data frame to store results
+  results <- data.frame("Col1" = character(0), 
+                        "Col2" = character(0), 
+                        stringsAsFactors = FALSE)
+
+  # Check tree is rooted
+  rooted_tree <- is.rooted(tree)
+  if (rooted_tree) {
+    results <- rbind(results, c("Rooted", "Yes"))
+  } else {
+    results <- rbind(results, c("Rooted", "No"))
+  }
+
+  # Check tree is bifurcating:
+  binary_tree <- is.binary.phylo(tree)
+  if (binary_tree) {
+    results <- rbind(results, c("Bifurcated", "Yes"))
+  } else {
+    results <- rbind(results, c("Bifurcated", "No"))
+  }
+
+  # Check tree is ultrametric:
+  ultrametric_tree <- is.ultrametric(tree)
+  if (ultrametric_tree) {
+    results <- rbind(results, c("Ultrametric", "Yes"))
+  } else {
+    results <- rbind(results, c("Ultrametric", "No"))
+  }
+
+  # Set column names
+    colnames(results) <- c("Check", "Result")
+  
+  # Print the results
+  print(results)
+}
+```
+
+```{r Bartlett ANOVA Tukey or Games Howell Function, echo=FALSE}
+
+##the following function will determine a suitable test of variance and post-hoc test as determined by the result of an test of equal variance. Data is input into the function, a bartlett test is performed to determine whether the data has equal variances (null hypothesis is equal variance) and either performs a one-way ANOVA assuming equal or unequal variances. If variances are equal group differences are calculated using Tukey's honestly significant difference or if variances are unequal a Games-Howell test, both use a confidence level of 95%.
+
+##suggested usage:
+
+#bartlett_ANOVA_posthoc(data_frame, 'response', 'factor')
+#e.g. bartlett_ANOVA_posthoc(summary_data_transformed, 'total_count', 'water_system')
+
+bartlett_ANOVA_posthoc <- function(data, response, factor) {
+  
+  data <- as.data.frame(data)
+  
+  # Perform the Bartlett test to check for equal variances
+  bartlett_test <- bartlett.test(data[, response] ~ data[, factor])
+  
+  # Determine which type of ANOVA to perform based on the Bartlett test result
+  if (bartlett_test$p.value >= 0.05) {
+    # Equal variances assumed
+    aov_result <- oneway.test(data[, response] ~ data[, factor], data)
+    posthoc_test <- TukeyHSD(aov_result, conf.level = 0.95)
+  } else {
+    # Unequal variances
+    aov_result <- oneway.test(data[, response] ~ data[, factor], data, var.equal = FALSE)
+    posthoc_test <- rstatix::games_howell_test(data = data, formula = as.formula(paste(response, '~', factor)), conf.level = 0.95, detailed = FALSE)
+  }
+  
+  # Print the summary of the ANOVA result
+  print(summary(aov_result))
+  
+  # Extract the p-value for the main effect
+  main_effect_pvalue <- tryCatch({
+    aov_result$p.value
+  }, error = function(e) {
+    NA
+  })
+  
+  # Print the results
+if (!is.na(main_effect_pvalue) && length(main_effect_pvalue) == 1) {
+  if (main_effect_pvalue <= 0.05) {
+    cat('There is a significant main effect of', factor, 'on', response, '\n\n')
+  } else {
+    cat('There is not a significant main effect of', factor, 'on', response, '\n\n')
+  }
+  
+  # Print post-hoc test results in both cases
+  print(posthoc_test)
+  } else {
+  cat('Error: Unable to determine the main effect p-value.')
+  }
+}
+```
+
+```{r Defining Dataframe Tree Pruning Function, echo=FALSE}
+
+#Here a function is defined that automatically processes and prunes a phylogenetic tree and a corresponding dataframe (based on 'species_name') and reorders the dataframe to match the order of the tip.labels present on the phylogeny. The dataframe is subsequently converted into a trait matrix for input into various phytool (Revell) functions. It also stores qualitative data (e.g. mouthbrooder etc.) in a separate dataframe that can be accessed and appended to the PCA scores.
+
+#note that it assumes that the tip.labels and species_names are formatted in the same way
+
+prune_tree_and_dataframe <- function(input_tree, data_frame) {
+
+  # Prune tree to species present in data frame
+  pruned_tree <- drop.tip(input_tree, which(!input_tree$tip.label %in% data_frame$species_name))
+
+  # Subset data frame to include only species present in the pruned tree
+  pruned_data_frame <- data_frame[data_frame$species_name %in% pruned_tree$tip.label, ]
+
+  # Reorder data frame based on the order of tip labels in the pruned tree
+  pruned_data_frame <- pruned_data_frame[match(pruned_tree$tip.label, pruned_data_frame$species_name), ]
+
+  # Store columns 1:9 from the pruned data frame
+  stored_data <- pruned_data_frame[, 1:9]
+
+  # Remove columns 1:9 and 14 from the pruned data frame
+  pruned_data_frame <- pruned_data_frame[, -c(1:9, 14)]
+
+  # Convert pruned data frame into a matrix
+  pruned_matrix <- as.matrix(pruned_data_frame)
+
+  # Use the first column of stored_data as row names for the matrix
+  rownames(pruned_matrix) <- stored_data[, 1]
+
+  return(list(tree = pruned_tree, matrix_data = pruned_matrix, stored_data = stored_data))
+}
+
+```
+
+```{r Defining Functions for pPCA Calculation, echo=FALSE}
+
+# Function to calculate pPCA
+calculate_pPCA <- function(tree, matrix_data) {
+  return(phytools::phyl.pca(tree, matrix_data, method = "BM", mode = "corr"))
+}
+
+# Function to plot biplot
+plot_biplot <- function(pPCA) {
+  biplot(pPCA)
+}
+
+# Function to calculate percentage variance explained
+calculate_percentage_variance <- function(pPCA) {
+  percentage_variance <- diag(pPCA$Eval) / sum(diag(pPCA$Eval)) * 100
+  return(t(percentage_variance))
+}
+```
+
+# Data Import
+
+```{r Import the Transformed Species Mean Vertebral Count Data}
+
+## This is importing the vertebral count data that includes species from every tribe within Pseudocrenilabrinae (Family: Cichlidae)
+
+# Read in the data
+vertebral_counts <- read.csv('Data/vertebral_counts_species_transformed.csv')
+vertebral_counts <- vertebral_counts[-1]
+
+#check the colnames
+colnames(vertebral_counts)
+
+#check the data:
+head(vertebral_counts)
+
+#remove rows with missing values (aspect ratios due to non-lateralised specimens)
+vertebral_counts_no_missing <- na.omit(vertebral_counts)
+
+```
+
+```{r Import McGee 2020 Phylogeny}
+#import the tree and rename the tip labels -- note this tee
+mcgee_2020 <- 
+  read.tree("Phylogenies/phylogenies_mcgee_2020/phylogeny_mcgee_2020.tre")
+
+#format tip labels to match the formatting of the species_names in data-frames
+mcgee_2020$tip.label <- gsub("_", " ", mcgee_2020$tip.label)
+
+#ladderise the phylogeny:
+mcgee_2020 <- ladderize(mcgee_2020)
+```
+
+```{r Prune McGee 2020 to check missing African cichlids, echo=FALSE}
+
+#prune tree to heterochromis multidens to isolate all the African cichlids:
+
+# Identify the African cichlid species, including Heterochromis multidens
+african_cichlids_tips <- c("Heterochromis multidens", 
+                           "Astatotilapia calliptera"
+                           )
+
+# Ensure all specified species are in the tree
+african_cichlids_tips <- african_cichlids_tips[african_cichlids_tips %in% mcgee_2020$tip.label]
+
+# Find the MRCA node of the African cichlids
+mrca_node <- getMRCA(mcgee_2020, african_cichlids_tips)
+
+# Extract the clade from the MRCA node
+mcgee_2020_african <- extract.clade(mcgee_2020, node = mrca_node)
+
+# Ladderize the pruned African cichlids tree for better visualization
+mcgee_2020_african_2 <- ladderize(mcgee_2020_african)
+
+# Identify the species to drop from the data frame
+species_to_drop <- vertebral_counts_no_missing$species_name
+
+# Drop tips that are in the species_to_drop list from the African cichlids tree
+mcgee_2020_african_missing <- drop.tip(mcgee_2020_african_2, species_to_drop)
+
+# Plot the pruned tree to verify the missing species
+#plot and save the phylogeny as a PDF on A4 
+pdf("Figures/All Species Phylogenetic PCA/missing_species_mcgee_2020_check.pdf", width = 8.3, height = 11.7) #note dimensions here are in inches
+
+plot(mcgee_2020_african_missing,
+     type='radial',
+     no.margin=TRUE, 
+     use.edge.length = FALSE,
+     align.tip.label = TRUE,
+     cex=0.25)
+add.scale.bar()
+#nodelabels(frame="none",adj=c(1.1,-0.4))
+
+dev.off()
+```
+
+```{r Plot Boxplots of Count Distributions by Water System, echo=FALSE}
+
+water_system_order <- c("Lake Victoria", "Lake Malawi", "Lake Tanganyika", "Riverine")
+
+vertebral_counts_no_missing$water_system <- factor(
+  vertebral_counts_no_missing$water_system,
+  levels = water_system_order
+)
+
+write.csv(vertebral_counts_no_missing, "Data/vertebral_counts_no_missing.csv")
+
+#plot the total counts by water_system
+e1 <- ggplot(data=vertebral_counts_no_missing, aes(x=water_system, y=total_count))+
+  geom_boxplot(outlier.shape = NA)+
+  geom_jitter(data = vertebral_counts_no_missing, aes(x = water_system, y = total_count, colour = haplochromine), width = 0.35, size = 2.00, alpha = 0.75)+
+  stat_summary(fun = mean, geom = "point", shape = 4, color = 'red', size = 4)+
+  xlab("Water System")+
+  ylab("Mean ln[Total Count]")+
+  theme_classic()
+e1 <- e1 + theme(legend.position='none',
+                 axis.text = element_text(size=14),
+                 axis.title = element_text(size=14))
+e1
+
+ggsave("Figures/All Species Phylogenetic PCA/total_count_plot.pdf", e1, width = 20, height = 15, units = "cm")
+
+#plot the precaudal:caudal ratio by water_system
+e2 <- ggplot(data = vertebral_counts_no_missing, aes(x = water_system, y = ln_pc_ln_c)) +
+  geom_boxplot(outlier.shape = NA) +
+  geom_jitter(data = vertebral_counts_no_missing, aes(x = water_system, y = ln_pc_ln_c, colour = haplochromine), width = 0.35, size = 2.00, alpha = 0.75)+
+  stat_summary(fun = mean, geom = "point", shape = 4, color = 'red', size = 4) +
+  geom_hline(yintercept = 0.00, linetype = "dashed", colour = 'black', size = 1) + 
+  xlab("Water System") +
+  ylab("ln[Precaudal] - ln[Caudal]") +
+  theme_classic()
+e2 <- e2 + theme(legend.position='none',
+                 axis.text = element_text(size=14),
+                 axis.title = element_text(size=14))
+e2
+
+ggsave("Figures/All Species Phylogenetic PCA/precaudal_caudal_ratio_plot.pdf", e2, width = 20, height = 15, units = "cm")
+
+#plot the precaudal count by water_system
+e3 <- ggplot(data = vertebral_counts_no_missing, aes(x = water_system, y = precaudal_count)) +
+  geom_boxplot(outlier.shape = NA) +
+  geom_jitter(data = vertebral_counts_no_missing, aes(x = water_system, y = precaudal_count, colour = haplochromine), width = 0.35, size = 2.00, alpha = 0.75)+
+  stat_summary(fun = mean, geom = "point", shape = 4, color = 'red', size = 4)+
+  xlab("Water System") +
+  ylab("Mean ln[Precaudal Count]") +
+  theme_classic()
+e3 <- e3 + theme(legend.position='none',
+                 axis.text = element_text(size=14),
+                 axis.title = element_text(size=14))
+e3
+
+ggsave("Figures/All Species Phylogenetic PCA/precaudal_count_plot.pdf", e3, width = 20, height = 15, units = "cm")
+
+#plot the precaudal count by water_system
+e4 <- ggplot(data = vertebral_counts_no_missing, aes(x = water_system, y = caudal_count)) +
+  geom_boxplot(outlier.shape = NA) +
+  geom_jitter(data = vertebral_counts_no_missing, aes(x = water_system, y = caudal_count, colour = haplochromine), width = 0.35, size = 2.00, alpha = 0.75)+
+  stat_summary(fun = mean, geom = "point", shape = 4, color = 'red', size = 4)+
+  xlab("Water System") +
+  ylab("Mean ln[Caudal Count]") +
+  theme_classic()
+e4 <- e4 + theme(legend.position='none',
+                 axis.text = element_text(size=14),
+                 axis.title = element_text(size=14))
+e4
+
+ggsave("Figures/All Species Phylogenetic PCA/caudal_count_plot.pdf", e4, width = 20, height = 15, units = "cm")
+
+#plot the body aspect ratio by water_system
+e5 <- ggplot(data = vertebral_counts_no_missing, aes(x = water_system, y = ln_length_ln_width)) +
+  geom_boxplot(outlier.shape = NA) +
+  geom_jitter(data = vertebral_counts_no_missing, aes(x = water_system, y = ln_length_ln_width, colour = haplochromine), width = 0.35, size = 2.00, alpha = 0.75)+
+  stat_summary(fun = mean, geom = "point", shape = 4, color = 'red', size = 4)+
+  xlab("Water System") +
+  ylab("Mean ln[Length] - ln[Width]") +
+  theme_classic()
+e5 <- e5 + theme(legend.position='none',
+                 axis.text = element_text(size=14),
+                 axis.title = element_text(size=14))
+e5
+
+ggsave("Figures/All Species Phylogenetic PCA/body_aspect_ratio_plot.pdf", e5, width = 20, height = 15, units = "cm")
+```
+
+```{r Preparing the Data for PCA Analysis}
+
+# Extracting individual vectors for qualitative traits
+species_name <- vertebral_counts_no_missing$species_name
+genus <- vertebral_counts_no_missing$genus
+tribe <- vertebral_counts_no_missing$tribe
+haplochromine <- vertebral_counts_no_missing$haplochromine
+water_system <- vertebral_counts_no_missing$water_system
+lm_ecology <- vertebral_counts_no_missing$lm_ecology
+mouthbrooder <- vertebral_counts_no_missing$mouthbrooder
+depth <- vertebral_counts_no_missing$depth
+piscivore <- vertebral_counts_no_missing$piscivore
+
+#remove n_count from data 
+columns_to_remove <- c("n_count")
+
+# Create a new data frame without the specified column
+vertebral_counts_no_missing <- vertebral_counts_no_missing[, !colnames(vertebral_counts_no_missing) %in% columns_to_remove]
+
+# Create new data frame with just the quantitative (numeric) data
+quantitative_data <- vertebral_counts_no_missing[, sapply(vertebral_counts_no_missing, is.numeric)]
+```
+
+#Phylogenetic PCA of Count Data
+
+```{r Calculate pPCA for All Species using McGee 2020 Tree}
+#####Calculate the pPCA for all species
+
+#prune the tree and subset the data and reorder the dataframe
+all_species <- prune_tree_and_dataframe(mcgee_2020, 
+                                        vertebral_counts_no_missing)
+
+#remove anterior and posterior aspect ratios (for now)
+#all_species_matrix_data <- all_species$matrix_data[, !colnames(all_species$matrix_data) %in% c("ln_ant_length_ln_width", "ln_post_length_ln_width")]
+#rownames(all_species_matrix_data) <- rownames(all_species$matrix_data)
+
+#save all_species object for import into other code 
+saveRDS(all_species, 'Data/all_species.rds')
+
+#calculate the pPCA for all species 
+pPCA_all_species <- phytools::phyl.pca(all_species$tree, 
+                                       all_species$matrix_data, 
+                                       method = "BM", 
+                                       mode = "corr")
+
+
+#save as rds object for import to other code
+saveRDS(pPCA_all_species, 'Data/pPCA_all_species.rds')
+
+#print the loadings for each PC:
+pPCA_all_species$L
+
+nrow(pPCA_all_species$S)
+
+# Calculate and print percentage variance explained
+percentage_variance_all_species <- calculate_percentage_variance(pPCA_all_species)
+
+cat("Percentage Variance Explained for all species", ":\n")
+print(percentage_variance_all_species)
+cat("\n")
+
+#bind qualitative data and calculated PCA scores for plotting:
+pPCA_scores_all_species <- cbind(all_species$stored_data, pPCA_all_species$S)
+
+######Plot the pruned phylogeny
+
+#plot and save the pruned tree:
+pdf("Figures/All Species Phylogenetic PCA/pPCA_mcgee_2020_pruned_tree_all_species.pdf", width = 8.3, height = 11.7)
+
+# Plot the pruned tree
+plot(all_species$tree,
+     no.margin=TRUE, 
+     use.edge.length = TRUE,
+     align.tip.label = TRUE,
+     type = 'fan',
+     cex=0.50)
+add.scale.bar()
+
+dev.off()
+
+####Export PCA scores for all species: 
+write.csv(pPCA_scores_all_species, "Data/pPCA_scores_all_species.csv")
+```
+
+```{r Import PCA Score Data}
+
+pPCA_scores_all_species <- 
+  read.csv('Data/pPCA_scores_all_species.csv')
+
+mutate_columns <- c("PC1") #, "PC2", "PC3", "PC4", "PC5")
+
+pPCA_scores_all_species <- pPCA_scores_all_species %>%
+  mutate(across(all_of(mutate_columns), ~ . * -1)) #PC1 axis reversed so more positive = more elongate
+```
+
+```{r Plot the pPCA Scores for All Species Pruned on McGee 2020 Tree}
+
+#####Plot PC1 against PC2 for all species pruned in the McGee 2020 Tree:
+
+#extract the loading for PC1 and 2 (*5 for arrow size effect)
+PC1_load.x <- pPCA_all_species$L[,1] * -5 #negative as PC1 has been multipled by -1 to reverse axis
+PC2_load.y <- pPCA_all_species$L[,2] * 5
+
+# Get label positions (%50 further than end of arrows)
+l.posx <- PC1_load.x*1
+l.posy <- PC2_load.y*1
+
+# Get labels for plot (variable names)
+l.labels <- row.names(pPCA_all_species$L)
+
+d1 <- ggplot()+
+  geom_point(data=pPCA_scores_all_species, aes(PC1, PC2, shape=water_system, colour=water_system), size = 2.5, alpha=0.50)+
+  stat_ellipse(data=pPCA_scores_all_species, aes(PC1, PC2, group = water_system, colour=water_system), type = "norm", level =   0.95, linetype = "solid", size=1)+
+  xlab("PC1")+ #check above for variance explained
+  ylab("PC2")+ #check above for variance explained
+  geom_segment(aes(x=0, y=0, xend = PC1_load.x, yend = PC2_load.y), 
+              arrow = arrow(length = unit(0.2, "cm"), type = "closed"),
+              colour = "black", alpha=0.75)+
+   #geom_vline(xintercept = 0, color = "red")+  # Add vertical line at x = 0
+   #geom_hline(yintercept = 0, color = "red")+
+   geom_text(aes(x = l.posx, y = l.posy, label = l.labels), 
+            colour = "black", size = 5, hjust = 0) + # labels
+  theme_classic()
+d1 <- d1 + theme(
+                 axis.text = element_text(size=14),
+                 axis.title = element_text(size=14))
+d1
+
+ggsave("Figures/All Species Phylogenetic PCA/all_species_pc1_pc2.pdf", d1, width = 20, height = 15, units = "cm")
+
+#####Plot PC2 against PC3 for all species pruned in the McGee 2020 Tree:
+
+#extract the loading for PC3 (*5 for arrow size effect) - PC2 defined above
+PC2_load.x <- pPCA_all_species$L[,2] * 5
+PC3_load.y <- pPCA_all_species$L[,3] * 5
+
+# Get label positions (%15 further than end of arrows) -- note this overrides the l.posx/y defined above
+l.posx <- PC2_load.x*1.15
+l.posy <- PC3_load.y*1.15
+
+
+d2 <- ggplot()+
+  geom_point(data=pPCA_scores_all_species, aes(PC2, PC3, shape=water_system, colour=water_system), size = 2, alpha=0.50)+
+  stat_ellipse(data=pPCA_scores_all_species, aes(PC2, PC3, group = water_system, colour=water_system), type = "norm", level = 0.95, linetype = "solid", size=1)+
+  xlab("PC2")+ #check above for variance explained
+  ylab("PC3")+ #check above for variance explained
+  geom_segment(aes(x=0, y=0, xend = PC2_load.x, yend = PC3_load.y), 
+               arrow = arrow(length = unit(0.2, "cm"), type = "closed"),
+               colour = "black", alpha=0.75)+
+  geom_text(aes(x = l.posx, y = l.posy, label = l.labels), 
+            colour = "black", size = 5, hjust = 0) + # labels
+  theme_classic()
+d2 <- d2 + theme(
+                 axis.text = element_text(size=14),
+                 axis.title = element_text(size=14))
+d2
+
+ggsave("Figures/All Species Phylogenetic PCA/all_species_pc2_pc3.pdf", d2, width = 20, height = 15, units = "cm")
+```
+
+```{r Plot the pPCA Scores for All Species based on Brooding Behaviour Pruned on McGee 2020 Tree}
+
+pPCA_scores_all_species_brooding <- 
+  pPCA_scores_all_species %>%
+  filter(mouthbrooder != 'data_deficient') #remove species for which there is no data avaliable for brooding behaviour 
+
+#####Plot PC1 against PC2 for all species pruned in the McGee 2020 Tree:
+
+#extract the loading for PC1 and 2 (*5 for arrow size effect)
+PC1_load.x <- pPCA_all_species$L[,1] * -5 #negative as PC1 has been multipled by -1 to reverse axis
+PC2_load.y <- pPCA_all_species$L[,2] * 5
+
+# Get label positions (%50 further than end of arrows)
+l.posx <- PC1_load.x*1
+l.posy <- PC2_load.y*1
+
+# Get labels for plot (variable names)
+l.labels <- row.names(pPCA_all_species$L)
+
+d1 <- ggplot()+
+  geom_point(data=pPCA_scores_all_species_brooding, aes(PC1, PC2, shape=mouthbrooder, colour=mouthbrooder), size = 2.5, alpha=0.50)+
+  stat_ellipse(data=pPCA_scores_all_species_brooding, aes(PC1, PC2, group = mouthbrooder, colour=mouthbrooder), type = "norm", level =   0.95, linetype = "solid", size=1)+
+  xlab("PC1")+ #check above for variance explained
+  ylab("PC2")+ #check above for variance explained
+  geom_segment(aes(x=0, y=0, xend = PC1_load.x, yend = PC2_load.y), 
+              arrow = arrow(length = unit(0.2, "cm"), type = "closed"),
+              colour = "black", alpha=0.75)+
+   #geom_vline(xintercept = 0, color = "red")+  # Add vertical line at x = 0
+   #geom_hline(yintercept = 0, color = "red")+
+   geom_text(aes(x = l.posx, y = l.posy, label = l.labels), 
+            colour = "black", size = 5, hjust = 0) + # labels
+  theme_classic()
+d1 <- d1 + theme(
+                 axis.text = element_text(size=14),
+                 axis.title = element_text(size=14))
+d1
+
+ggsave("Figures/All Species Phylogenetic PCA/all_species_brooding_behaviour_pc1_pc2.pdf", d1, width = 20, height = 15, units = "cm")
+
+```
+
+```{r set Colour Scale for Heat Maps}
+set.seed(1931)
+colours <- magma(6) #select 6 equally spaced colours in magma scale
+```
+
+```{r Compute Contmap Objects for PC1, PC2 and PC3 for All Species}
+
+#remember to check the limits of the contmap before plotting -- if new data added the limits will be different.
+
+#Compute 'contmap' object for PC1:
+all_species_pc1_contmap <- 
+  contMap(all_species$tree,
+          type="fan",
+          pPCA_all_species$S[,1]*-1, #making higher elongation more positive
+          lims=c(-2.03595, 6.504824), #setting limits for calculation of the CI to make plotting easier, this was added after computing contMap without limits
+          plot=FALSE) #can set colour limits using limits=c(min, max) default is the min and max value
+
+#Set custom colour gradient:
+all_species_pc1_contmap <- 
+  setMap(all_species_pc1_contmap, colours)
+
+#Compute 'contmap' object for PC2:
+all_species_pc2_contmap <- 
+  contMap(all_species$tree,
+          type="fan",
+          pPCA_all_species$S[,2],
+          lims=c(-3.234032, 8.819181), #setting limits for calculation of the CI to make plotting easier, this was added after computing contMap without limits
+          plot=FALSE) #can set colour limits using limits=c(min, max) default is the min and max value
+
+#Set custom colour gradient:
+all_species_pc2_contmap <- 
+  setMap(all_species_pc2_contmap, colours)
+
+#Compute 'contmap' object:
+all_species_pc3_contmap <- 
+  contMap(all_species$tree,
+          type="fan",
+          pPCA_all_species$S[,3],
+          lims=c(-3.272676, 2.0017), #setting limits for calculation of the CI to make plotting easier, this was added after computing contMap without limits
+          plot=FALSE) #can set colour limits using limits=c(min, max) default is the min and max value
+
+#Set custom colour gradient:
+all_species_pc3_contmap <- 
+  setMap(all_species_pc3_contmap, colours)
+```
+
+```{r Plot PC1 PC2 and PC3 Contmaps for All Species Phylogeny}
+
+##### Plot PC1 onto the phylogeny:
+
+pdf("Figures/All Species Phylogenetic PCA/all_species_pc1_contmap.pdf", width=8.4, height=11)
+
+#Plot 'contmap' object:
+plot(all_species_pc1_contmap,
+     legend=FALSE,
+     type = 'fan',
+     lwd=0.75,
+     fsize = 0.25,
+     offset = 2.00)
+add.color.bar(10, all_species_pc1_contmap$cols,title="PC1", 
+    lims=all_species_pc1_contmap$lims,digits=2,prompt=FALSE,x=0,
+    y=4.00,lwd=5,fsize=0.55,subtitle="10 Myrs") ##length of legend also scaled to time
+
+dev.off()
+
+##### Plot PC2 onto the phylogeny:
+
+pdf("Figures/All Species Phylogenetic PCA/all_species_pc2_contmap.pdf", width=8.4, height=11)
+
+#3) Plot 'contmap' object:
+plot(all_species_pc2_contmap,
+     legend=FALSE,
+     type = 'fan',
+     lwd=0.75,
+     fsize = 0.25,
+     offset = 2.00)
+add.color.bar(10, all_species_pc2_contmap$cols,title="PC2", 
+    lims=all_species_pc2_contmap$lims,digits=2,prompt=FALSE,x=0,
+    y=4.00,lwd=5,fsize=0.55,subtitle="10 Myrs") ##length of legend also scaled to time
+
+dev.off()
+
+##### Plot PC3 onto the phylogeny:
+
+pdf("Figures/All Species Phylogenetic PCA/all_species_pc3_contmap.pdf", width=8.4, height=11)
+
+#3) Plot 'contmap' object:
+plot(all_species_pc3_contmap,
+     legend=FALSE,
+     type = 'fan',
+     lwd=0.75,
+     fsize = 0.25,
+     offset = 2.00)
+add.color.bar(10, all_species_pc3_contmap$cols,title="PC3", 
+    lims=all_species_pc3_contmap$lims,digits=2,prompt=FALSE,x=0,
+    y=4.00,lwd=5,fsize=0.55,subtitle="10 Myrs") ##length of legend also scaled to time
+
+dev.off()
+```
+
+```{r Extract Species with Max and Min PC Scores, echo=FALSE}
+
+#bind qualitative data and calculated PCA scores for plotting:
+pPCA_scores_all_species <- cbind(all_species$stored_data, pPCA_all_species$S)
+
+#extract extreme rows for each PC (i.e. species with max values for PC1-3):
+row_max_PC1 <- pPCA_scores_all_species[which.max(pPCA_scores_all_species$PC1), ]
+row_max_PC1$PC_extreme <- 'max PC1'
+
+row_max_PC2 <- pPCA_scores_all_species[which.max(pPCA_scores_all_species$PC2), ]
+row_max_PC2$PC_extreme <- 'max PC2'
+
+row_max_PC3 <- pPCA_scores_all_species[which.max(pPCA_scores_all_species$PC3), ]
+row_max_PC3$PC_extreme <- 'max PC3'
+
+#extract extreme rows for each PC (i.e. species with min values for PC1-3):
+row_min_PC1 <- pPCA_scores_all_species[which.min(pPCA_scores_all_species$PC1), ]
+row_min_PC1$PC_extreme <- 'min PC1'
+
+row_min_PC2 <- pPCA_scores_all_species[which.min(pPCA_scores_all_species$PC2), ]
+row_min_PC2$PC_extreme <- 'min PC2'
+
+row_min_PC3 <- pPCA_scores_all_species[which.min(pPCA_scores_all_species$PC3), ]
+row_min_PC3$PC_extreme <- 'min PC3'
+
+#bind rows together into dataframe
+extreme_all_species_PCs <- 
+  rbind(row_max_PC1,
+        row_min_PC1,
+        row_max_PC2,
+        row_min_PC2,
+        row_max_PC3,
+        row_min_PC3)
+```
+
+```{r Identify Riverine Species Which Occupy Distinct Axial Morphospace}
+
+pPCA_scores_all_species_lake <-
+  pPCA_scores_all_species %>%
+  filter(water_system != 'Riverine')
+
+pPCA_scores_all_species_riverine <- 
+  pPCA_scores_all_species %>%
+  filter(water_system == 'Riverine')
+
+#filter species with PC1 and PC2 scores that fall outside of the range occupied by the lacustrine species
+pPCA_scores_riverine_distinct <-
+  pPCA_scores_all_species %>%
+  filter(water_system == "Riverine") %>%
+  filter(PC1 >= 6.5030925 | PC1 <= -0.9611181932 | PC2 <= -0.12534360 | PC2 >= 8.820364) #range of PC2 values for the lacustrine species
+
+pPCA_scores_riverine_distinct
+
+####Export PCA scores for distinct riverine species: 
+write.csv(pPCA_scores_riverine_distinct, "Data/pPCA_scores_riverine_distinct.csv")
+
+#semi-join with the dataframe containing the count data
+all_species_data <- as.data.frame(cbind(all_species$matrix_data, "species_name" = all_species$stored_data$species_name))
+
+distinct_riverine_count_data <- 
+  semi_join(all_species_data, pPCA_scores_riverine_distinct, by='species_name')
+
+####Export count data for distinct riverine species: 
+write.csv(distinct_riverine_count_data, "Data/distinct_riverine_count_data.csv")
+```

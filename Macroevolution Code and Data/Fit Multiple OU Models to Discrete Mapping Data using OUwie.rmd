@@ -1,0 +1,772 @@
+---
+title: "Fit Multiple OU Models to Discrete Mapping Data using OUwie (Riverine versus Lacustrine)"
+author: "Callum Bucklow"
+date: '`r Sys.Date()`'
+output:
+  pdf_document: default
+  html_document: default
+editor_options:
+  markdown:
+    wrap: 72
+---
+
+```{r Setup, include=FALSE}
+knitr::opts_chunk$set(message = FALSE) ##Remove messages for all chunks
+knitr::opts_chunk$set(warning = FALSE) ##Remove warnings for all chunks
+```
+
+```{r Libraries}
+# Load the necessary libraries
+library(tidyverse) #data wrangling
+library(tidyr) #data wrangling
+library(dplyr)
+library(ggplot2) #for plotting when I don't want to use Base R
+library(gridExtra) #for ggplot, to plot multiple plots together
+library(fitdistrplus) #for fitting distributions to data
+library(ape) #for phylogeny manipulation and all the rest
+library(phytools) #for various things, including phylogenetic PCA, PGLM etc.
+library(nlme) #for pgls
+library(geiger) #for fitting trait evolution models to phylogenies
+library(OUwie) #for fitting multiple regime OU models to trait evolution models
+library(caper) #for pgls and will report pseudo-r2 for these models
+```
+
+```{r Import All Species Data}
+all_species <- readRDS("Data/all_species.rds")
+```
+
+```{r Defining Primary Data Variables}
+all_species_stored_data <- all_species$stored_data
+all_species_matrix_data <- all_species$matrix_data
+all_species_tree <- all_species$tree
+```
+
+# Fitting Multiple OU Models to Piscivory Simmap
+
+```{r Preparing Piscivory Data}
+#import qualitative data
+all_species_stored_data_piscivore <- read.csv('Data/all_species_stored_data_piscivore.csv')
+
+#import quantitative data
+all_species_matrix_data_piscivore <- read.csv('Data/all_species_matrix_data_piscivore.csv')
+
+#prune the tree:
+all_species_tree_piscivore_pruned <- keep.tip(all_species$tree, all_species_stored_data_piscivore$species_name)
+
+#create trait variable for fitting discrete models:
+all_species_piscivore <- all_species_stored_data_piscivore$piscivore
+names(all_species_piscivore) <- all_species_stored_data_piscivore$species_name
+```
+
+```{r Import Piscivory Simmap}
+all_species_piscivore_simmap <- readRDS('Data/all_species_piscivore_simmap.rds')
+```
+
+```{r Define Function to Fit Multiple Models (OUwie) to Piscivore Simmap}
+fit_multiple_regime_models <- function(tree, species_data, matrix_data, simmap_tree_index = 1, fit_common_models = TRUE) {
+  # Isolate piscivory data
+  species_piscivore_null <- species_data
+  names(species_piscivore_null) <- NULL
+  
+  # Create the OUwie dataframe
+  ouwie_df <- data.frame(
+    species_name = names(species_data),
+    variable = species_piscivore_null,
+    tc = as.numeric(matrix_data[, 3])
+  )
+  
+  # Initialize a list to store model fits
+  fits <- list()
+  aic_values <- c()
+  
+  if (simmap_tree_index == random_tree_indices[[1]] && fit_common_models) {
+    # Fit common models only for the first tree
+    fits$BM1 <- OUwie(tree[[simmap_tree_index]], ouwie_df, model = 'BM1', simmap.tree = TRUE)
+    fits$OU1 <- OUwie(tree[[simmap_tree_index]], ouwie_df, model = 'OU1', simmap.tree = TRUE, root.station = FALSE)
+    
+    aic_values <- c(
+      BM1 = fits$BM1$AIC,
+      OU1 = fits$OU1$AIC
+    )
+  } else {
+    # Use the results from the first tree for subsequent trees
+    fits$BM1 <- NULL  # Placeholder for consistency
+    fits$OU1 <- NULL  # Placeholder for consistency
+    
+    # Reuse AIC values from the first tree
+    aic_values <- c(
+      BM1 = NA,  # Indicating that the value is reused
+      OU1 = NA   # Indicating that the value is reused
+    )
+  }
+  
+  # Fit models specific to each tree
+  fits$BMS <- OUwie(tree[[simmap_tree_index]], ouwie_df, model = 'BMS', simmap.tree = TRUE, root.station = FALSE)
+  fits$OUM <- OUwie(tree[[simmap_tree_index]], ouwie_df, model = 'OUM', simmap.tree = TRUE, root.station = FALSE)
+  fits$OUMV <- OUwie(tree[[simmap_tree_index]], ouwie_df, model = 'OUMV', simmap.tree = TRUE, root.station = FALSE)
+  fits$OUMA <- OUwie(tree[[simmap_tree_index]], ouwie_df, model = 'OUMA', simmap.tree = TRUE, root.station = FALSE)
+  
+  # Append the AIC values of the tree-specific models
+  aic_values <- c(
+    aic_values,
+    BMS = fits$BMS$AIC,
+    OUM = fits$OUM$AIC,
+    OUMV = fits$OUMV$AIC,
+    OUMA = fits$OUMA$AIC
+  )
+  
+  # Create a list to store all model fits and AIC values
+  result <- list(
+    aic_values = aic_values,
+    fits = fits
+  )
+  
+  return(result)
+}
+
+```
+
+```{r Fit Multiple OU Models to Data using OUwie for Piscivory}
+# Fit the models for 100 randomly chosen trees
+set.seed(1931) # Setting a seed for reproducibility
+random_tree_indices <- sample(length(all_species_piscivore_simmap), 1)
+
+for (i in random_tree_indices) {
+  all_species_piscivore_simmap[[i]]$edge.length <- all_species_tree_piscivore_pruned_edges
+}
+
+ouwie_all_results_piscivore <- list()
+
+for (i in random_tree_indices) {
+  cat("Fitting models for tree index:", i, "\n")
+  results <- fit_multiple_regime_models(
+    tree = all_species_piscivore_simmap,
+    species_data = all_species_piscivore,
+    matrix_data = all_species_matrix_data_piscivore,
+    simmap_tree_index = i,
+    fit_common_models = TRUE #fits BM1 and OU1 models to first tree only (since it will be the same regardless of tree)
+  )
+  ouwie_all_results_piscivore[[i]] <- results
+}
+
+#save the results output to prevent having to redo analysis:
+saveRDS(ouwie_all_results_piscivore, "Data/ouwie_all_results_piscivore.rds")
+```
+
+```{r Filtering and Assembling OUwie Piscivore Results}
+
+#import the RDS object with the OU results:
+ouwie_all_results_piscivore <- readRDS("Data/ouwie_all_results_piscivore.rds")
+
+#filter results output to only contain the trees for which models were fitted:
+ouwie_all_results_piscivore_filtered <- ouwie_all_results_piscivore[random_tree_indices]
+
+# Initialize an empty list to store AIC values
+ouwie_all_results_piscivore_filtered_aic <- list()
+
+# Loop through each model result and extract the AIC values
+for (i in seq_along(ouwie_all_results_piscivore_filtered)) {
+  ouwie_all_results_piscivore_filtered_aic[[i]] <- ouwie_all_results_piscivore_filtered[[i]]$aic_values
+}
+
+# Combine the list into a matrix 
+ouwie_all_results_piscivore_filtered_aic_df <- do.call(rbind, ouwie_all_results_piscivore_filtered_aic)
+
+#convert matrix to dataframe:
+ouwie_all_results_piscivore_filtered_aic_df <- as.data.frame(ouwie_all_results_piscivore_filtered_aic_df)
+
+#convert into long format for easier plotting:
+ouwie_all_results_piscivore_filtered_aic_df_long <- ouwie_all_results_piscivore_filtered_aic_df %>%
+  pivot_longer(cols = everything(), 
+               names_to = "model", 
+               values_to = "aic")
+
+#plot the aic values for each of the models (note that BM and OU1 will be the same for each model)
+ggplot(ouwie_all_results_piscivore_filtered_aic_df_long, aes(x=model, y=aic))+
+      geom_boxplot()+
+        theme_classic()
+
+#plot the aic values for each of the models (note that BM and OU1 will be the same for each model)
+ggplot(ouwie_all_results_piscivore_filtered_aic_df_long, aes(x=model, y=aic))+
+      geom_boxplot(outlier.shape = NA)+
+      #ylim(-1380, -1300)+
+      theme_classic()
+```
+
+```{r Checking OUwie Piscivore Result Parameters}
+
+# Extract sigma-squared values for non-piscivore and piscivore from each entry in the list
+sigma_squared_values <- lapply(ouwie_all_results_piscivore_filtered[1:100], function(x) {
+  data.frame(
+    sigma_squared = c(x$fits$BMS$solution[[2]], x$fits$BMS$solution[[4]]),
+    group = c("non-piscivore", "piscivore")
+  )
+})
+
+# Combine all entries into a single dataframe
+sigma_squared_df <- do.call(rbind, sigma_squared_values)
+
+#plot the sigma-squared values according to piscivore or non-piscivore 
+ggplot(sigma_squared_df, aes(x=group, y=sigma_squared, colour=group))+
+  geom_boxplot(outlier.shape = NA)+
+  geom_jitter()+
+  theme_classic()
+```
+
+# Fitting Multiple OU Models to Water System Simmap
+
+```{r Prepare All Species Data with their Water System Occupancy}
+#recreate trait variables for fitting discrete models:
+all_species_water_system <- all_species_stored_data$water_system
+names(all_species_water_system) <- all_species_stored_data$species_name
+
+#save edge lengths for later:
+all_species_tree_water_system_pruned_edges <- all_species_tree$edge.length
+```
+
+```{r Define Function to Fit Multiple Models (OUwie) to Water System Simmap}
+fit_multiple_regime_models <- function(tree, species_data, matrix_data, simmap_tree_index = 1, fit_common_models = TRUE) {
+  # Isolate water system data
+  species_water_system_null <- species_data
+  names(species_water_system_null) <- NULL
+  
+  # Create the OUwie dataframe
+  ouwie_df <- data.frame(
+    species_name = names(species_data),
+    variable = species_water_system_null,
+    tc = as.numeric(matrix_data[, 3])
+  )
+  
+  # Initialize a list to store model fits
+  fits <- list()
+  aic_values <- c()
+  
+  if (simmap_tree_index == random_tree_indices[[1]] && fit_common_models) {
+    # Fit common models only for the first tree
+    fits$BM1 <- OUwie(tree[[simmap_tree_index]], ouwie_df, model = 'BM1', simmap.tree = TRUE)
+    fits$OU1 <- OUwie(tree[[simmap_tree_index]], ouwie_df, model = 'OU1', simmap.tree = TRUE, root.station = FALSE)
+    
+    aic_values <- c(
+      BM1 = fits$BM1$AIC,
+      OU1 = fits$OU1$AIC
+    )
+  } else {
+    # Use the results from the first tree for subsequent trees
+    fits$BM1 <- NULL  # Placeholder for consistency
+    fits$OU1 <- NULL  # Placeholder for consistency
+    
+    # Reuse AIC values from the first tree
+    aic_values <- c(
+      BM1 = NA,  # Indicating that the value is reused
+      OU1 = NA   # Indicating that the value is reused
+    )
+  }
+  
+  # Fit models specific to each tree
+  fits$BMS <- OUwie(tree[[simmap_tree_index]], ouwie_df, model = 'BMS', simmap.tree = TRUE, root.station = FALSE)
+  fits$OUM <- OUwie(tree[[simmap_tree_index]], ouwie_df, model = 'OUM', simmap.tree = TRUE, root.station = FALSE)
+  fits$OUMV <- OUwie(tree[[simmap_tree_index]], ouwie_df, model = 'OUMV', simmap.tree = TRUE, root.station = FALSE)
+  fits$OUMA <- OUwie(tree[[simmap_tree_index]], ouwie_df, model = 'OUMA', simmap.tree = TRUE, root.station = FALSE)
+  
+  # Append the AIC values of the tree-specific models
+  aic_values <- c(
+    aic_values,
+    BMS = fits$BMS$AIC,
+    OUM = fits$OUM$AIC,
+    OUMV = fits$OUMV$AIC,
+    OUMA = fits$OUMA$AIC
+  )
+  
+  # Create a list to store all model fits and AIC values
+  result <- list(
+    aic_values = aic_values,
+    fits = fits
+  )
+  
+  return(result)
+}
+
+```
+
+```{r Import Water System Simmap}
+
+all_species_water_system_simmap <- readRDS('Data/all_species_water_system_simmap.rds')
+
+```
+
+```{r Fit Multiple OU Models to Data using OUwie for Water System}
+# Fit the models for 100 randomly chosen trees
+set.seed(1931) # Setting a seed for reproducibility
+random_tree_indices <- sample(length(all_species_water_system_simmap), 100)
+
+for (i in random_tree_indices) {
+  all_species_water_system_simmap[[i]]$edge.length <- all_species_tree_water_system_pruned_edges
+}
+
+ouwie_all_results_water_system <- list()
+
+for (i in random_tree_indices) {
+  cat("Fitting models for tree index:", i, "\n")
+  results <- fit_multiple_regime_models(
+    tree = all_species_water_system_simmap,
+    species_data = all_species_water_system,
+    matrix_data = all_species_matrix_data,
+    simmap_tree_index = i,
+    fit_common_models = TRUE #fits BM1 and OU1 models to first tree only (since it will be the same regardless of tree)
+  )
+  ouwie_all_results_water_system[[i]] <- results
+}
+
+#save the results output to prevent having to redo analysis:
+saveRDS(ouwie_all_results_water_system, "Data/ouwie_all_results_water_system.rds")
+```
+
+```{r Filtering and Assembling OUwie Water System Results}
+
+#import the RDS object with the OU results:
+ouwie_all_results_water_system <- readRDS("Data/ouwie_all_results_water_system.rds")
+
+#filter results output to only contain the trees for which models were fitted:
+ouwie_all_results_water_system_filtered <- ouwie_all_results_water_system[random_tree_indices]
+
+# Initialize an empty list to store AIC values
+ouwie_all_results_water_system_filtered_aic <- list()
+
+# Loop through each model result and extract the AIC values
+for (i in seq_along(ouwie_all_results_water_system_filtered)) {
+  ouwie_all_results_water_system_filtered_aic[[i]] <- ouwie_all_results_water_system_filtered[[i]]$aic_values
+}
+
+# Combine the list into a matrix 
+ouwie_all_results_water_system_filtered_aic_df <- do.call(rbind, ouwie_all_results_water_system_filtered_aic)
+
+#convert matrix to dataframe:
+ouwie_all_results_water_system_filtered_aic_df <- as.data.frame(ouwie_all_results_water_system_filtered_aic_df)
+
+#convert into long format for easier plotting:
+ouwie_all_results_water_system_filtered_aic_df_long <- ouwie_all_results_water_system_filtered_aic_df %>%
+  pivot_longer(cols = everything(), 
+               names_to = "model", 
+               values_to = "aic")
+
+#plot the aic values for each of the models (note that BM and OU1 will be the same for each model)
+ggplot(ouwie_all_results_water_system_filtered_aic_df_long, aes(x=model, y=aic))+
+      geom_boxplot()+
+        theme_classic()
+```
+
+# Fitting Multiple OU Models to Water System Simmap (Riverine versus Lacustrine)
+
+```{r Import the Simmap Object}
+
+all_species_riverine_lacustrine_simmap <- readRDS('Data/all_species_riverine_lacustrine_simmap.rds')
+
+```
+
+```{r Prepare All Species Data with their Riverine or Lacustrine Occupancy}
+#create trait variable for fitting discrete models:
+all_species_water_system <- all_species_stored_data$water_system
+names(all_species_water_system) <- all_species_stored_data$species_name
+
+#create a copy of all_species_water_system
+all_species_riverine_lacustrine <- all_species_water_system
+
+#convert to character to avoid factor level issues
+all_species_riverine_lacustrine <- as.character(all_species_riverine_lacustrine)
+
+#replace specific lake names with 'Lacustrine'
+all_species_riverine_lacustrine[all_species_riverine_lacustrine %in% c("Lake Malawi", "Lake Tanganyika", "Lake Victoria")] <- "Lacustrine"
+
+#redefine the rownames
+names(all_species_riverine_lacustrine) <- names(all_species_water_system)
+
+#conmvert matrix into dataframe
+all_species_matrix_data_df <- as.data.frame(all_species_matrix_data)
+
+#isolate quantitative data
+all_species_riverine_lacustrine_matrix <- 
+  all_species_matrix_data_df %>%
+  filter(names(all_species_riverine_lacustrine) %in% rownames(all_species_matrix_data_df))
+
+#save edge lengths for later:
+all_species_tree_water_system_pruned_edges <- all_species_tree$edge.length
+```
+
+```{r Define Function to Fit Multiple Models (OUwie) to Water System Simmap}
+fit_multiple_regime_models <- function(tree, species_data, matrix_data, simmap_tree_index = 1, fit_common_models = TRUE) {
+  # Isolate water system data
+  species_water_system_null <- species_data
+  names(species_water_system_null) <- NULL
+  
+  # Create the OUwie dataframe
+  ouwie_df <- data.frame(
+    species_name = names(species_data),
+    variable = species_water_system_null,
+    tc = as.numeric(matrix_data[, 3])
+  )
+  
+  # Initialize a list to store model fits
+  fits <- list()
+  aic_values <- c()
+  
+  if (simmap_tree_index == random_tree_indices[[1]] && fit_common_models) {
+    # Fit common models only for the first tree
+    fits$BM1 <- OUwie(tree[[simmap_tree_index]], ouwie_df, model = 'BM1', simmap.tree = TRUE)
+    fits$OU1 <- OUwie(tree[[simmap_tree_index]], ouwie_df, model = 'OU1', simmap.tree = TRUE, root.station = FALSE)
+    
+    aic_values <- c(
+      BM1 = fits$BM1$AIC,
+      OU1 = fits$OU1$AIC
+    )
+  } else {
+    # Use the results from the first tree for subsequent trees
+    fits$BM1 <- NULL  # Placeholder for consistency
+    fits$OU1 <- NULL  # Placeholder for consistency
+    
+    # Reuse AIC values from the first tree
+    aic_values <- c(
+      BM1 = NA,  # Indicating that the value is reused
+      OU1 = NA   # Indicating that the value is reused
+    )
+  }
+  
+  # Fit models specific to each tree
+  fits$BMS <- OUwie(tree[[simmap_tree_index]], ouwie_df, model = 'BMS', simmap.tree = TRUE, root.station = FALSE)
+  fits$OUM <- OUwie(tree[[simmap_tree_index]], ouwie_df, model = 'OUM', simmap.tree = TRUE, root.station = FALSE)
+  fits$OUMV <- OUwie(tree[[simmap_tree_index]], ouwie_df, model = 'OUMV', simmap.tree = TRUE, root.station = FALSE)
+  fits$OUMA <- OUwie(tree[[simmap_tree_index]], ouwie_df, model = 'OUMA', simmap.tree = TRUE, root.station = FALSE)
+  
+  # Append the AIC values of the tree-specific models
+  aic_values <- c(
+    aic_values,
+    BMS = fits$BMS$AIC,
+    OUM = fits$OUM$AIC,
+    OUMV = fits$OUMV$AIC,
+    OUMA = fits$OUMA$AIC
+  )
+  
+  # Create a list to store all model fits and AIC values
+  result <- list(
+    aic_values = aic_values,
+    fits = fits
+  )
+  
+  return(result)
+}
+
+```
+
+```{r Fit Multiple OU Models to Data using OUwie for Water System}
+# Fit the models for 100 randomly chosen trees
+set.seed(1931) # Setting a seed for reproducibility
+random_tree_indices <- sample(length(all_species_riverine_lacustrine_simmap), 100)
+
+for (i in random_tree_indices) {
+  all_species_riverine_lacustrine_simmap[[i]]$edge.length <- all_species_tree_water_system_pruned_edges
+}
+
+ouwie_all_results_riverine_lacustrine <- list()
+
+for (i in random_tree_indices) {
+  cat("Fitting models for tree index:", i, "\n")
+  results <- fit_multiple_regime_models(
+    tree = all_species_riverine_lacustrine_simmap,
+    species_data = all_species_riverine_lacustrine,
+    matrix_data = all_species_riverine_lacustrine_matrix,
+    simmap_tree_index = i,
+    fit_common_models = TRUE #fits BM1 and OU1 models to first tree only (since it will be the same regardless of tree)
+  )
+  ouwie_all_results_riverine_lacustrine[[i]] <- results
+}
+
+
+#save the results output to prevent having to redo analysis:
+saveRDS(ouwie_all_results_riverine_lacustrine, "Data/ouwie_all_results_riverine_lacustrine.rds")
+```
+
+```{r Filtering and Assembling OUwie Water System Results}
+
+#import the RDS object with the OU results:
+ouwie_all_results_riverine_lacustrine <- readRDS("Data/ouwie_all_results_riverine_lacustrine.rds")
+
+#filter results output to only contain the trees for which models were fitted:
+ouwie_all_results_riverine_lacustrine_filtered <- ouwie_all_results_riverine_lacustrine[random_tree_indices]
+
+# Initialize an empty list to store AIC values
+ouwie_all_results_riverine_lacustrine_filtered_aic <- list()
+
+# Loop through each model result and extract the AIC values
+for (i in seq_along(ouwie_all_results_riverine_lacustrine_filtered)) {
+  ouwie_all_results_riverine_lacustrine_filtered_aic[[i]] <- ouwie_all_results_riverine_lacustrine_filtered[[i]]$aic_values
+}
+
+# Combine the list into a matrix 
+ouwie_all_results_riverine_lacustrine_filtered_aic_df <- do.call(rbind, ouwie_all_results_riverine_lacustrine_filtered_aic)
+
+#convert matrix to dataframe:
+ouwie_all_results_riverine_lacustrine_filtered_aic_df <- as.data.frame(ouwie_all_results_riverine_lacustrine_filtered_aic_df)
+
+#convert into long format for easier plotting:
+ouwie_all_results_riverine_lacustrine_filtered_aic_df_long <- ouwie_all_results_riverine_lacustrine_filtered_aic_df %>%
+  pivot_longer(cols = everything(), 
+               names_to = "model", 
+               values_to = "aic")
+
+```
+
+```{r Plotting AIC Values for Each Model Fit}
+
+#plot the aic values for each of the models (note that BM and OU1 will be the same for each model)
+ggplot(ouwie_all_results_riverine_lacustrine_filtered_aic_df_long, aes(x=model, y=aic))+
+      geom_boxplot()+
+      theme_classic()
+
+#plot to limit axes to lowest two models (BMS and OUMV)
+ggplot(ouwie_all_results_riverine_lacustrine_filtered_aic_df_long, aes(x=model, y=aic))+
+      geom_boxplot()+
+      ylim(-1450, -1420)+
+      theme_classic()
+```
+
+```{r Testing scaleHeight for OUM, OUMV and OUMA model fits}
+
+#note that we have changed the above function to do this
+
+# Fit the models for 100 randomly chosen trees
+set.seed(1931) # Setting a seed for reproducibility
+random_tree_indices <- sample(length(all_species_riverine_lacustrine_simmap), 5)
+
+#for (i in random_tree_indices) {
+  #all_species_riverine_lacustrine_simmap[[i]]$edge.length <- all_species_tree_water_system_pruned_edges
+#}
+
+ouwie_all_results_riverine_lacustrine_scale_height_test <- list()
+
+for (i in random_tree_indices) {
+  cat("Fitting models for tree index:", i, "\n")
+  results <- fit_multiple_regime_models(
+    tree = all_species_riverine_lacustrine_simmap,
+    species_data = all_species_riverine_lacustrine,
+    matrix_data = all_species_riverine_lacustrine_matrix,
+    simmap_tree_index = i,
+    fit_common_models = FALSE #fits BM1 and OU1 models to first tree only (since it will be the same regardless of tree)
+  )
+ ouwie_all_results_riverine_lacustrine_scale_height_test[[i]] <- results
+}
+
+
+#save the results output to prevent having to redo analysis:
+saveRDS(ouwie_all_results_riverine_lacustrine_scale_height_test, "Data/ouwie_all_results_riverine_lacustrine_scale_height_test.rds")
+```
+
+```{r Testing Equal Edge Length for OUM, OUMV and OUMA model fits}
+
+#note that we have changed the above function to do this
+
+# Fit the models for 100 randomly chosen trees
+set.seed(1931) # Setting a seed for reproducibility
+random_tree_indices <- sample(length(all_species_riverine_lacustrine_simmap), 5)
+
+#not replacing the edge length
+#for (i in random_tree_indices) {
+  #all_species_riverine_lacustrine_simmap[[i]]$edge.length <- all_species_tree_water_system_pruned_edges
+#}
+
+ouwie_all_results_riverine_lacustrine_scale_height_equal_edge_length_test <- list()
+
+for (i in random_tree_indices) {
+  cat("Fitting models for tree index:", i, "\n")
+  results <- fit_multiple_regime_models(
+    tree = all_species_riverine_lacustrine_simmap,
+    species_data = all_species_riverine_lacustrine,
+    matrix_data = all_species_riverine_lacustrine_matrix,
+    simmap_tree_index = i,
+    fit_common_models = FALSE #fits BM1 and OU1 models to first tree only (since it will be the same regardless of tree)
+  )
+ ouwie_all_results_riverine_lacustrine_scale_height_equal_edge_length_test[[i]] <- results
+}
+
+
+#save the results output to prevent having to redo analysis:
+saveRDS(ouwie_all_results_riverine_lacustrine_scale_height_equal_edge_length_test, "Data/ouwie_all_results_riverine_lacustrine_scale_height_equal_edge_length_test.rds")
+```
+
+
+
+
+
+
+
+
+
+
+
+
+# Fitting Multiple OU Models to Depth Preference Simmap
+
+```{r Import Depth Preference Simmap}
+
+all_species_depth_simmap <- readRDS("Data/all_species_depth_simmap.rds")
+
+```
+
+```{r Prepare All Species Data with their Depth Preference}
+#create trait variable for fitting discrete models:
+all_species_depth <- all_species_stored_data$depth
+names(all_species_depth) <- row.names(all_species_stored_data)
+
+#save edge lengths for later:
+all_species_tree_depth_pruned_edges <- all_species_tree$edge.length
+
+#define the matrix data as a dataframe
+all_species_matrix_data_df <- as.data.frame(all_species_matrix_data)
+```
+
+```{r Define Function to Fit Multiple Models (OUwie) to Depth Preference Simmap}
+fit_multiple_regime_models <- function(tree, species_data, matrix_data, simmap_tree_index = 1, fit_common_models = TRUE) {
+  # Isolate depth data
+  species_depth_null <- species_data
+  #names(species_depth_null) <- NULL
+  
+  # Create the OUwie dataframe
+  ouwie_df <- data.frame(
+    species_name = names(species_data),
+    variable = species_depth_null,
+    tc = as.numeric(matrix_data[, 3])
+  )
+  
+  # Initialize a list to store model fits
+  fits <- list()
+  aic_values <- c()
+  
+  if (simmap_tree_index == random_tree_indices[[1]] && fit_common_models) {
+    # Fit common models only for the first tree
+    fits$BM1 <- OUwie(tree[[simmap_tree_index]], ouwie_df, model = 'BM1', simmap.tree = TRUE)
+    fits$OU1 <- OUwie(tree[[simmap_tree_index]], ouwie_df, model = 'OU1', simmap.tree = TRUE, root.station = FALSE) 
+    
+    aic_values <- c(
+      BM1 = fits$BM1$AIC,
+      OU1 = fits$OU1$AIC
+    )
+  } else {
+    # Use the results from the first tree for subsequent trees
+    fits$BM1 <- NULL  # Placeholder for consistency
+    fits$OU1 <- NULL  # Placeholder for consistency
+    
+    # Reuse AIC values from the first tree
+    aic_values <- c(
+      BM1 = NA,  # Indicating that the value is reused
+      OU1 = NA   # Indicating that the value is reused
+    )
+  }
+  
+  # Fit models specific to each tree
+  fits$BMS <- OUwie(tree[[simmap_tree_index]], ouwie_df, model = 'BMS', simmap.tree = TRUE, root.station = FALSE) 
+  fits$OUM <- OUwie(tree[[simmap_tree_index]], ouwie_df, model = 'OUM', simmap.tree = TRUE, root.station = FALSE) 
+  fits$OUMV <- OUwie(tree[[simmap_tree_index]], ouwie_df, model = 'OUMV', simmap.tree = TRUE, root.station = FALSE) 
+  fits$OUMA <- OUwie(tree[[simmap_tree_index]], ouwie_df, model = 'OUMA', simmap.tree = TRUE, root.station = FALSE)
+  
+  # Append the AIC values of the tree-specific models
+  aic_values <- c(
+    aic_values,
+    BMS = fits$BMS$AIC,
+    OUM = fits$OUM$AIC,
+    OUMV = fits$OUMV$AIC,
+    OUMA = fits$OUMA$AIC
+  )
+  
+  # Create a list to store all model fits and AIC values
+  result <- list(
+    aic_values = aic_values,
+    fits = fits
+  )
+  
+  return(result)
+}
+```
+
+```{r Fit Multiple OU Models to Data using OUwie for Depth Preference}
+
+# Fit the models for 100 randomly chosen trees
+set.seed(1931) # Setting a seed for reproducibility
+random_tree_indices <- sample(length(all_species_depth_simmap), 100)
+
+#generate random tree index
+for (i in random_tree_indices) {
+  all_species_depth_simmap[[i]]$edge.length <- all_species_tree_depth_pruned_edges
+}
+
+#initialise empty list to store results
+ouwie_all_results_depth <- list()
+
+for (i in random_tree_indices) {
+  cat("Fitting models for tree index:", i, "\n")
+  results <- fit_multiple_regime_models(
+    tree = all_species_depth_simmap,
+    species_data = all_species_depth,
+    matrix_data = all_species_matrix_data_df,
+    simmap_tree_index = i,
+    fit_common_models = TRUE #fits BM1 and OU1 models to first tree only (since it will be the same regardless of tree)
+  )
+  ouwie_all_results_depth[[i]] <- results
+}
+
+
+#save the results output to prevent having to redo analysis:
+saveRDS(ouwie_all_results_depth, "Data/ouwie_all_results_depth.rds")
+```
+
+```{r Filtering and Assembling OUwie Depth Preference Results}
+
+#import the RDS object with the OU results:
+ouwie_all_results_depth <- readRDS("Data/ouwie_all_results_depth.rds")
+
+#filter results output to only contain the trees for which models were fitted:
+ouwie_all_results_depth_filtered <- ouwie_all_results_depth[random_tree_indices]
+
+# Initialize an empty list to store AIC values
+ouwie_all_results_depth_filtered_aic <- list()
+
+# Loop through each model result and extract the AIC values
+for (i in seq_along(ouwie_all_results_depth_filtered)) {
+  ouwie_all_results_depth_filtered_aic[[i]] <- ouwie_all_results_depth_filtered[[i]]$aic_values
+}
+
+# Combine the list into a matrix 
+ouwie_all_results_depth_filtered_aic_df <- do.call(rbind, ouwie_all_results_depth_filtered_aic)
+
+#convert matrix to dataframe:
+ouwie_all_results_depth_filtered_aic_df <- as.data.frame(ouwie_all_results_depth_filtered_aic_df)
+
+#convert into long format for easier plotting:
+ouwie_all_results_depth_filtered_aic_df_long <- ouwie_all_results_depth_filtered_aic_df %>%
+  pivot_longer(cols = everything(), 
+               names_to = "model", 
+               values_to = "aic")
+
+#plot the aic values for each of the models (note that BM and OU1 will be the same for each model)
+ggplot(ouwie_all_results_depth_filtered_aic_df_long, aes(x=model, y=aic))+
+      geom_boxplot(outlier.shape=NA)+
+      ylim(-2000, 0)+
+      theme_classic()
+```
+
+```{r Checking OUwie Depth Preference Result Parameters}
+
+# Extract sigma-squared values for non-piscivore and piscivore from each entry in the list
+sigma_squared_values_depth <- lapply(ouwie_all_results_depth_filtered[1:100], function(x) {
+  data.frame(
+    sigma_squared = c(x$fits$BMS$solution[[2]], x$fits$BMS$solution[[4]], x$fits$BMS$solution[[6]], x$fits$BMS$solution[[8]]),
+    group = c("bathydemersal",  "benthopelagic", "demersal", "pelagic")
+  )
+})
+
+# Combine all entries into a single dataframe
+sigma_squared_depth_df <- do.call(rbind, sigma_squared_values_depth)
+
+#plot the sigma-squared values according to piscivore or non-piscivore 
+ggplot(sigma_squared_depth_df %>% filter(group != "bathydemersal"), aes(x=group, y=sigma_squared, colour=group)) +
+  geom_boxplot(outlier.shape = NA)+
+  geom_jitter(alpha=0.50)+
+  theme_classic()
+```

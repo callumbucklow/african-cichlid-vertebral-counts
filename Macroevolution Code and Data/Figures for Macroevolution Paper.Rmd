@@ -1,0 +1,1181 @@
+---
+title: "Figures for Macroevolution Paper"
+author: "Callum Bucklow"
+date: '`r Sys.Date()`'
+output:
+  pdf_document: default
+  html_document: default
+editor_options:
+  markdown:
+    wrap: 72
+---
+
+```{r Setup, include=FALSE}
+knitr::opts_chunk$set(message = FALSE) ##Remove messages for all chunks
+knitr::opts_chunk$set(warning = FALSE) ##Remove warnings for all chunks
+```
+
+```{r Libraries}
+# Load the necessary libraries
+library(tidyverse) #data wrangling
+library(tidyr) #data wrangling
+library(dplyr)
+library(ggplot2) #for plotting when I don't want to use Base R
+library(gridExtra) #for ggplot, to plot multiple plots together
+library(fitdistrplus) #for fitting distributions to data
+library(ape) #for phylogeny manipulation and all the rest
+library(phytools) #for various things, including phylogenetic PCA, PGLM etc.
+library(nlme) #for pgls
+library(geiger) #for fitting trait evolution models to phylogenies
+library(OUwie) #for fitting multiple regime OU models to trait evolution models
+library(viridis)
+library(geomorph) #for MANOVA of PC scores
+library(cluster) #for dissimilarity matrix calculation 
+library(MASS) #for 95% CI ellipse overlap
+```
+
+```{r Data Import}
+
+pPCA_all_species <- 
+  readRDS("Data/pPCA_all_species.rds")
+
+pPCA_scores_all_species <- 
+  read.csv("Data/pPCA_scores_all_species.csv")
+
+vertebral_counts_no_missing <-
+  read.csv("Data/vertebral_counts_no_missing.csv")
+  
+all.ols.aspect.total <- readRDS("Data/all_ols_aspect_total.rds")
+
+all.pgls.aspect.total <- readRDS("Data/all_pgls_aspect_total_lambda.rds")
+```
+
+```{r Preparation of All Species Data}
+
+#import all the data
+all_species <- readRDS("Data/all_species.rds")
+
+#reorder the dataframe to match the matrix rownames
+temp_df <-  all_species$stored_data[match(rownames(all_species$matrix_data), all_species$stored_data$species_name), ]
+
+#bind the dataframe and matrix together
+all_species_data <- cbind(all_species$stored_data, all_species$matrix_data)
+```
+
+```{r Which extant species is closest to common ancestor?}
+
+#ensure categorical columns are factors
+all_species_data$water_system <- as.factor(all_species_data$water_system)
+all_species_data$depth <- as.factor(all_species_data$depth)
+all_species_data$piscivore <- as.factor(all_species_data$piscivore)
+all_species_data$mouthbrooder <- as.factor(all_species_data$mouthbrooder)
+
+#create ancestral traits as a dataframe (values taken from estimates)
+ancestral_traits <- data.frame(
+  ln_pc_ln_c = -0.091,
+  total_count = 3.343,
+  ln_length_ln_width = 0.986,
+  ln_ant_length_ln_width = -0.148,
+  ln_post_length_ln_width = 0.628,
+  water_system = factor("Riverine", levels = levels(all_species_data$water_system)),
+  depth = factor("benthopelagic", levels = levels(all_species_data$depth)),
+  piscivore = factor("non-piscivore", levels = levels(all_species_data$piscivore)),
+  mouthbrooder = factor("substrate_brooder", levels = levels(all_species_data$mouthbrooder))
+)
+
+#select matching columns from dataset
+matching_columns <- names(ancestral_traits)
+existing_columns <- intersect(matching_columns, colnames(all_species_data))
+data_to_compare <- all_species_data[, existing_columns, drop = FALSE]
+rownames(data_to_compare) <- NULL
+
+#combine ancestral traits with dataset
+combined_data <- rbind(ancestral_traits, data_to_compare)
+
+#compute Gower distance (if using categorical variables, switch to Euclidean if just using continuous trait variables)
+gower_dist <- daisy(combined_data, metric = "euclidean")
+gower_dist <- as.matrix(gower_dist)
+
+#extract distances (first row compared to all others)
+gower_distances <- as.vector(gower_dist[1, -1])
+
+min(gower_distances)
+max(gower_distances)
+
+#find closest match
+closest_species_index <- which.min(gower_distances)
+closest_species <- all_species_data[closest_species_index, ]
+
+#calculate similarity score
+1 - (min(gower_distances)/max(gower_distances))
+```
+
+```{r Water System Factorsing and Colours}
+
+#recode the levels of water_system factor
+vertebral_counts_no_missing$water_system <- dplyr::recode(vertebral_counts_no_missing$water_system,
+                                                  "Lake Victoria" = "LV",
+                                                  "Lake Malawi" = "LM",
+                                                  "Lake Tanganyika" = "LT",
+                                                  "Riverine" = "RV")
+
+#reordering the levels of water_system
+vertebral_counts_no_missing$water_system <- factor(vertebral_counts_no_missing$water_system, 
+                                                  levels = c("LV", "LM", "LT", "RV"))
+
+
+
+pPCA_scores_all_species$water_system <- dplyr::recode(pPCA_scores_all_species$water_system,
+                                                  "Lake Victoria" = "LV",
+                                                  "Lake Malawi" = "LM",
+                                                  "Lake Tanganyika" = "LT",
+                                                  "Riverine" = "RV")
+
+all_species_data$water_system <- dplyr::recode(all_species_data$water_system,
+                                                  "Lake Victoria" = "LV",
+                                                  "Lake Malawi" = "LM",
+                                                  "Lake Tanganyika" = "LT",
+                                                  "Riverine" = "RV")
+
+#reordering the levels of water_system
+pPCA_scores_all_species$water_system <- factor(pPCA_scores_all_species$water_system, 
+                                                  levels = c("LV", "LM", "LT", "RV"))
+
+#colours taken from Wong colour blind palette
+water_system_colours <- c("LV" = "#43AA8B", 
+                          "LM" = "#D55E00", 
+                          "LT" = "#0072B2", 
+                          "RV" = "#CC79A7")
+
+depth_colours <- c("bathydemersal" = "#D81B60",
+                                "benthopelagic" = "#1E88E5",
+                                "demersal" = "#FFC107", 
+                                "pelagic" = "#004D40")
+
+piscivore_colours <- c("non-piscivore" = 'darkgreen',
+                       "piscivore" = 'purple')
+
+
+brooding_colours <- c("maternal_mouthbrooder" = "#56B4E9",
+                      "substrate_brooder" = "#000000",
+                      "biparental_mouthbrooder" = "#009E73",
+                      "paternal_mouthbrooder" = "#E69F00")
+
+brooding_shapes <- c("maternal_mouthbrooder" = 19, 
+                     "substrate_brooder" = 17,
+                      "biparental_mouthbrooder" = 18,
+                      "paternal_mouthbrooder" = 3)
+
+```
+
+```{r Plot Radial Tree for Intro Figure}
+
+#prepare the data
+all_species_tree <- all_species$tree
+all_species_matrix_data <- all_species$matrix_data
+
+#isolate total count, precaudal:caudal ratio and body aspect ratio columns
+matrix_data <- exp(all_species_matrix_data[,3:5])
+water_system <- all_species$stored_data$water_system
+
+#define colours for water system
+water_system_colours <- c("Lake Victoria" = "#43AA8B", "Lake Malawi" = "#D55E00", "Lake Tanganyika" = "#0072B2", "Riverine" = "#CC79A7")
+tip_colours <- water_system_colours[as.character(water_system)]
+
+# Plot the tree with traits and color bars
+svg("Figures/Paper/intro_tree_labelled_test.svg", width = 8.4, height = 11)
+par(cex = 0.5)  # globally set font size
+
+# Define color palettes for the traits
+set.seed(1931)
+colours <- list(
+  c(plasma(4)),   # total count 
+  c('#B02418', 'white', '#67E0DA'), # PC:C
+  c(viridis(4))   # body aspect ratio
+)
+
+# Plot the tree with traits and colors
+cols <- plotFanTree.wTraits(
+  all_species_tree,
+  matrix_data, 
+  type = c("fan"),
+  colors = colours,
+  spacer = 0,
+  ftype = 'bi',
+  lwd = 12
+)
+
+# Add color bars for each trait
+add.color.bar(0.5 * max(nodeHeights(all_species_tree)), cols[[1]],
+  title = "", # total count
+  lims = range(matrix_data[, 1]), digits = 2, prompt = FALSE,
+  x = -0.225 * max(nodeHeights(all_species_tree)),
+  y = 0.20 * max(nodeHeights(all_species_tree)), subtitle = "",
+  fsize = 0.01, lwd = 8, outline = TRUE)
+
+add.color.bar(0.5 * max(nodeHeights(all_species_tree)), cols[[2]],
+  title = "", # PC:C
+  lims = range(matrix_data[, 2]), digits = 2, prompt = FALSE,
+  x = -0.225 * max(nodeHeights(all_species_tree)),
+  y = 0.40 * max(nodeHeights(all_species_tree)), subtitle = "",
+  fsize = 0.01, lwd = 8, outline = TRUE)
+
+add.color.bar(0.5 * max(nodeHeights(all_species_tree)), cols[[3]],
+  title = "", # body aspect ratio
+  lims = range(matrix_data[, 3]), digits = 2, prompt = FALSE,
+  x = -0.225 * max(nodeHeights(all_species_tree)),
+  y = 0.60 * max(nodeHeights(all_species_tree)), subtitle = "",
+  fsize = 0.01, lwd = 8, outline = TRUE)
+
+dev.off()
+```
+
+```{r Mutate PC1 Scores so that Increasing Elongation is Positive}
+pPCA_scores_all_species$PC1 <- pPCA_scores_all_species$PC1 * -1 #to make more elongation positive
+```
+
+```{r Plot PC1 against PC2 for All Species by Water System}
+
+#####Plot PC1 against PC2 for all species pruned in the McGee 2020 Tree:
+
+#extract the loading for PC1 and 2 (*5 for arrow size effect)
+PC1_load.x <- pPCA_all_species$L[,1] * -5 #negative here because we have multiplied PC1 by -1
+PC2_load.y <- pPCA_all_species$L[,2] * 5
+
+# Get label positions (%50 further than end of arrows)
+l.posx <- PC1_load.x*1
+l.posy <- PC2_load.y*1
+
+# Get labels for plot (variable names)
+l.labels <- row.names(pPCA_all_species$L)
+
+
+hm <- c("PC1" = -0.807, "PC2" = -0.697) #heterchromis multidens
+hm_df <- data.frame(PC1 = hm["PC1"], 
+                      PC2 = hm["PC2"])
+
+a1 <- ggplot()+
+  geom_point(data=pPCA_scores_all_species, aes(PC1, PC2, shape=haplochromine, colour=water_system), size = 1.50, alpha=0.75)+
+  stat_ellipse(data=pPCA_scores_all_species, aes(PC1, PC2, group = water_system, colour=water_system), type = "norm", level =   0.95, linetype = "solid", size=1)+
+  scale_colour_manual(values = water_system_colours)+
+  #geom_point(data = hm_df, aes(x = PC1, y = PC2), 
+             #size = 3, colour = '#CC79A7', shape = 17)+ #heterchromis multidens
+  xlab("PC1 (Variance explained: 66.40%)")+ #check above for variance explained
+  ylab("PC2 (Variance explained: 21.90%)")+ #check above for variance explained
+  geom_vline(xintercept = 0, linetype = 'dashed', colour='black', alpha=0.50)+
+  geom_hline(yintercept = 0, linetype = 'dashed', colour='black', alpha=0.50)+
+  xlim(-7.5, 7.5)+
+  theme_classic()+
+  theme(axis.text = element_text(size=12),
+        axis.title = element_text(size=14, face='bold'),
+        legend.position = 'none')
+a1
+
+ggsave("Figures/Paper/all_species_pc1_pc2.pdf", a1, width = 20, height = 10, units = "cm")
+
+
+###plot the loadings on a separate graph:
+a2 <- ggplot()+
+  geom_point(data=pPCA_scores_all_species, aes(PC1, PC2), size = 0.00, alpha=0.00)+
+  geom_segment(aes(x=0, y=0, xend = PC1_load.x, yend = PC2_load.y), 
+              arrow = arrow(length = unit(0.2, "cm"), type = "closed"),
+              colour = "black", alpha=1.00, linewidth = 1.00)+
+   #geom_text(aes(x = l.posx, y = l.posy, label = l.labels), 
+            #colour = "black", size = 5, hjust = 0)+ # labels
+  xlab("PC1")+ #check above for variance explained
+  ylab("PC2")+ #check above for variance explained
+  geom_vline(xintercept = 0, linetype = 'dashed', linewidth=1.00, colour='black', alpha=0.75)+
+  geom_hline(yintercept = 0, linetype = 'dashed', linewidth=1.00, colour='black', alpha=0.75)+
+  theme_classic()
+
+a2 <- a2 + theme(
+                 axis.text = element_text(size=0.00),
+                 axis.title = element_text(size=14, face='bold'),
+                 axis.ticks = element_blank(),
+                 legend.position = 'none')
+a2
+
+
+ggsave("Figures/Paper/all_species_pc1_pc2_loadings.pdf", a2, width = 10, height = 10, units = "cm")
+```
+
+```{r Identification of Riverine Species with Non-Lacustrine Phenotypes}
+#determine range of PC1 and PC2 for lacustrine species (i.e. so we can filter out riverine species outside of this range)
+lacustrine_range <- pPCA_scores_all_species %>%
+  filter(water_system != "RV") %>%
+  summarise(min_PC1 = min(PC1), max_PC1 = max(PC1),
+            min_PC2 = min(PC2), max_PC2 = max(PC2))
+
+#filter riverine species that fall outside the lacustrine range
+riverine_outliers <- pPCA_scores_all_species %>%
+  filter(water_system == "RV") %>%
+  filter(PC1 < lacustrine_range$min_PC1 | PC1 > lacustrine_range$max_PC1 |
+         PC2 < lacustrine_range$min_PC2 | PC2 > lacustrine_range$max_PC2)
+
+#output species
+riverine_outliers
+
+#species_names 
+riverine_outliers_species <- data.frame(species_name = riverine_outliers$species_name)
+
+#save to desktop
+write.csv(riverine_outliers_species, "~/Desktop/riverine_outliers.csv")
+```
+
+```{r MANOVA of PC1 and PC2 ~ Riverine/Lacustrine (All Species)}
+
+pPCA_scores_all_species_manova <- pPCA_scores_all_species %>%
+  mutate(water_system = case_when(
+    water_system %in% c('LV', 'LM', 'LT') ~ 'LA',
+    TRUE ~ water_system
+  ))
+
+pPCA_scores_all_species_manova
+
+#Fit MANOVA (Water system ~ PC1+PC2)
+water_system_manova_pc1_pc2 <- procD.lm(cbind(pPCA_scores_all_species_manova$PC1, pPCA_scores_all_species_manova$PC2) ~ pPCA_scores_all_species_manova$water_system, iter = 10000)
+summary(water_system_manova_pc1_pc2)
+
+#no pairwise test necessary (only two groups) but do anyway to get effect size:
+pairwise_results_water_system <- pairwise(water_system_manova_pc1_pc2, groups = pPCA_scores_all_species_manova$water_system)
+summary(pairwise_results_water_system)
+```
+
+```{r MANOVA of PC2 and PC3 ~ Riverine/Lacustrine (All Species)}
+
+#Fit MANOVA (Water system ~ PC1+PC2)
+water_system_manova_pc2_pc3 <- procD.lm(cbind(pPCA_scores_all_species_manova$PC2, pPCA_scores_all_species_manova$PC3) ~ pPCA_scores_all_species_manova$water_system, iter = 10000)
+summary(water_system_manova_pc2_pc3)
+
+#no pairwise test necessary (only two groups) but do anyway to get effect size:
+pairwise_results_water_system <- pairwise(water_system_manova_pc2_pc3, groups = pPCA_scores_all_species_manova$water_system)
+summary(pairwise_results_water_system)
+```
+
+```{r MANOVA of PC3 and PC4 ~ Riverine/Lacustrine (All Species)}
+
+#Fit MANOVA (Water system ~ PC1+PC2)
+water_system_manova_pc3_pc4 <- procD.lm(cbind(pPCA_scores_all_species_manova$PC3, pPCA_scores_all_species_manova$PC4) ~ pPCA_scores_all_species_manova$water_system, iter = 10000)
+summary(water_system_manova_pc3_pc4)
+
+#no pairwise test necessary (only two groups) but do anyway to get effect size:
+pairwise_results_water_system <- pairwise(water_system_manova_pc3_pc4, groups = pPCA_scores_all_species_manova$water_system)
+summary(pairwise_results_water_system)
+```
+
+```{r How much of lacustrine axial morphospace occupied by riverine species?}
+#for random generation
+set.seed(1931)
+
+#extract PC1 and PC2 for each group
+rv_data <- pPCA_scores_all_species_manova[pPCA_scores_all_species_manova$water_system == "RV", c("PC1", "PC2")]
+la_data <- pPCA_scores_all_species_manova[pPCA_scores_all_species_manova$water_system == "LA", c("PC1", "PC2")]
+
+#calculate covariance matrices for each group
+riverine_cov <- cov(rv_data[, c("PC1", "PC2")])
+lacustrine_cov <- cov(la_data[, c("PC1", "PC2")])
+
+#calculate the mean
+riverine_mean <- colMeans(rv_data[, c("PC1", "PC2")])
+lacustrine_mean <- colMeans(la_data[, c("PC1", "PC2")])
+
+#Define function to randomly select points inside morphospace occupied by lacustrine species (i.e. as determined by lacustrine PC1 and PC2 scores)
+generate_points_in_ellipse <- function(cov_matrix, mean, n_points = 100000) {
+  points <- mvrnorm(n = n_points, mu = mean, Sigma = cov_matrix) #assumes normal distribution
+  return(points)
+}
+
+#define function to check if points are inside the riverine ellipse
+points_inside_ellipse <- function(points, riverine_cov, riverine_mean) {
+  #compute the Mahalanobis distance for each point from the riverine mean
+  mahalanobis_dist <- mahalanobis(points, riverine_mean, riverine_cov)
+  
+  #threshold for 95% confidence ellipse (chi-squared distribution for 2D)
+  threshold <- qchisq(0.95, df = 2)
+  
+  #return TRUE for points inside the riverine ellipse
+  inside <- mahalanobis_dist <= threshold
+  return(inside)
+}
+
+#generate points inside the lacustrine ellipse
+lacustrine_points <- generate_points_in_ellipse(lacustrine_cov, lacustrine_mean, n_points = 100000)
+
+#check how many of these points fall inside the riverine ellipse
+points_in_riverine_ellipse <- points_inside_ellipse(lacustrine_points, riverine_cov, riverine_mean)
+
+#calculate the percentage of lacustrine points inside the riverine ellipse
+overlap_percentage <- mean(points_in_riverine_ellipse) * 100
+
+#output the percentage overlap
+overlap_percentage
+```
+
+```{r Plot PC2 against PC3 for All Species}
+
+#####Plot PC2 against PC3 for all species pruned in the McGee 2020 Tree:
+
+#extract the loading for PC3 (*5 for arrow size effect) - PC2 defined above
+PC2_load.x <- pPCA_all_species$L[,2] * 5
+PC3_load.y <- pPCA_all_species$L[,3] * 5
+
+#get label positions (%15 further than end of arrows) -- note this overrides the l.posx/y defined above
+l.posx <- PC2_load.x*1.15
+l.posy <- PC3_load.y*1.15
+
+
+a3 <- ggplot()+
+  geom_point(data=pPCA_scores_all_species, aes(PC2, PC3, shape=haplochromine, colour=water_system), size = 1.50, alpha=0.75)+
+  stat_ellipse(data=pPCA_scores_all_species, aes(PC2, PC3, group = water_system, colour=water_system, alpha=0.75), type = "norm", level = 0.95, linetype = "solid", size=1)+
+  scale_colour_manual(values = water_system_colours)+
+  xlim(-7.5, 7.5)+
+  xlab("PC2 (Variance explained: 21.90%)")+ #check above for variance explained
+  ylab("PC3 (Variance explained: 11.08%)")+ #check above for variance explained
+  geom_vline(xintercept = 0, linetype = 'dashed', colour='black', alpha=0.50)+
+  geom_hline(yintercept = 0, linetype = 'dashed', colour='black', alpha=0.50)+
+  theme_classic()+
+  theme(axis.text = element_text(size=12),
+        axis.title = element_text(size=12, face = 'bold'),
+        legend.position = 'none')
+a3
+
+ggsave("Figures/Paper/all_species_pc2_pc3.pdf", a3, width = 20, height = 10, units = "cm")
+
+###plot the loadings on a separate graph:
+a4 <- ggplot()+
+  geom_point(data=pPCA_scores_all_species, aes(PC2, PC3), size = 0.00, alpha=0.00)+
+  geom_segment(aes(x=0, y=0, xend = PC2_load.x, yend = PC3_load.y), 
+               arrow = arrow(length = unit(0.2, "cm"), type = "closed"),
+               colour = "black", alpha=1.00, linewidth = 1.00)+
+   #geom_text(aes(x = l.posx, y = l.posy, label = l.labels), 
+            #colour = "black", size = 5, hjust = 0)+ # labels
+  xlab("PC2")+ #check above for variance explained
+  ylab("PC3")+ #check above for variance explained
+  geom_vline(xintercept = 0, linetype = 'dashed', linewidth=1.00, colour='black', alpha=0.75)+
+  geom_hline(yintercept = 0, linetype = 'dashed', linewidth=1.00, colour='black', alpha=0.75)+
+  #ylim(-5, 5)+
+  #xlim(-5, 5)+
+  theme_classic()+
+  theme(axis.text = element_text(size=0.00),
+        axis.title = element_text(size=14, face='bold'),
+        axis.ticks = element_blank(),
+        legend.position = 'none')
+a4
+
+
+ggsave("Figures/Paper/all_species_pc2_pc3_loadings.pdf", a4, width = 10, height = 10, units = "cm")
+```
+
+```{r Plot PC3 against PC4 for All Species}
+
+#####Plot PC2 against PC3 for all species pruned in the McGee 2020 Tree:
+
+#extract the loading for PC3 (*5 for arrow size effect) - PC2 defined above
+PC3_load.x <- pPCA_all_species$L[,3] * 8
+PC4_load.y <- pPCA_all_species$L[,4] * 8
+
+#get label positions (%15 further than end of arrows) -- note this overrides the l.posx/y defined above
+l.posx <- PC3_load.x*1.15
+l.posy <- PC4_load.y*1.15
+
+
+a3 <- ggplot()+
+  geom_point(data=pPCA_scores_all_species, aes(PC3, PC4, shape=haplochromine, colour=water_system), size = 1.50, alpha=0.75)+
+  stat_ellipse(data=pPCA_scores_all_species, aes(PC3, PC4, group = water_system, colour=water_system, alpha=0.75), type = "norm", level = 0.95, linetype = "solid", size=1)+
+  scale_colour_manual(values = water_system_colours)+
+  xlim(-7.5, 7.5)+
+  xlab("PC3 (Variance explained: 11.08%)")+ #check above for variance explained
+  ylab("PC4 (Variance explained: 0.583%)")+ #check above for variance explained
+  geom_vline(xintercept = 0, linetype = 'dashed', colour='black', alpha=0.50)+
+  geom_hline(yintercept = 0, linetype = 'dashed', colour='black', alpha=0.50)+
+  theme_classic()+
+  theme(axis.text = element_text(size=12),
+        axis.title = element_text(size=12, face = 'bold'),
+        legend.position = 'none')
+a3
+
+ggsave("Figures/Paper/all_species_pc3_pc4.pdf", a3, width = 20, height = 10, units = "cm")
+
+###plot the loadings on a separate graph:
+a5 <- ggplot()+
+  geom_point(data=pPCA_scores_all_species, aes(PC3, PC4), size = 0.00, alpha=0.00)+
+  geom_segment(aes(x=0, y=0, xend = PC3_load.x, yend = PC4_load.y), 
+               arrow = arrow(length = unit(0.2, "cm"), type = "closed"),
+               colour = "black", alpha=1.00, linewidth = 1.50)+
+   #geom_text(aes(x = l.posx, y = l.posy, label = l.labels), 
+            #colour = "black", size = 5, hjust = 0)+ # labels
+  xlab("PC3")+ #check above for variance explained
+  ylab("PC4")+ #check above for variance explained
+  geom_vline(xintercept = 0, linetype = 'dashed', linewidth=1.00, colour='black', alpha=0.75)+
+  geom_hline(yintercept = 0, linetype = 'dashed', linewidth=1.00, colour='black', alpha=0.75)+
+  #ylim(-5, 5)+
+  xlim(-5, 5)+
+  theme_classic()+
+  theme(axis.text = element_text(size=0.00),
+        axis.title = element_text(size=14, face='bold'),
+        axis.ticks = element_blank(),
+        legend.position = 'none')
+a5
+
+
+ggsave("Figures/Paper/all_species_pc3_pc4_loadings.pdf", a5, width = 10, height = 10, units = "cm")
+```
+
+```{r Plot PC1 for Piscivory and Depth}
+########## Diet Preference
+#remove data deficients for piscivory
+pPCA_scores_all_species_no_dd <-
+  pPCA_scores_all_species %>%
+  filter(piscivore != 'data_deficient')
+
+# Convert the column to a factor
+pPCA_scores_all_species_no_dd$piscivore <- factor(pPCA_scores_all_species_no_dd$piscivore)
+
+# Rename the levels
+levels(pPCA_scores_all_species_no_dd$piscivore) <- c("Non-Piscivore", "Piscivore")
+
+#plot a boxplot according to diet preference for PC1
+a5 <- ggplot(pPCA_scores_all_species_no_dd, aes(x=piscivore, y=PC1))+
+  geom_boxplot(outlier.shape = NA, linewidth=0.5)+
+  geom_jitter(size=1.50, width = 0.35, alpha=0.75, aes(x=piscivore, 
+                                                 y=PC1, 
+                                                 colour=water_system, 
+                                                 shape=haplochromine))+
+  scale_colour_manual(values = water_system_colours)+
+  stat_summary(fun = mean, geom = "point", shape = 4, colour = 'black', size = 3)+
+  xlab("Diet Preference")+
+  ylab("PC1")+
+  theme_classic()+
+  theme(legend.position='none',
+                 axis.text = element_text(size=10),
+                 axis.title = element_text(size=12, face='bold'))
+
+ggsave("Figures/Paper/pc1_by_piscivory.jpg", a5, dpi=300, width = 10, height = 10, units = "cm")
+
+########## Depth Preference
+
+#remove bathydemersal entry:
+pPCA_scores_all_species_no_bd <-
+  pPCA_scores_all_species %>%
+  filter(depth != 'bathydemersal')
+
+# Convert the column to a factor
+pPCA_scores_all_species_no_bd$depth <- factor(pPCA_scores_all_species_no_bd$depth)
+
+# Rename the levels
+levels(pPCA_scores_all_species_no_bd$depth) <- c("Benthopelagic", "Demersal", "Pelagic")
+
+#depth preference
+a6 <- ggplot(pPCA_scores_all_species_no_bd, aes(x=depth, y=PC1))+
+  geom_boxplot(outlier.shape = NA, linewidth=0.5)+
+  geom_jitter(size=1.50, width = 0.35, alpha=0.75, aes(x=depth, 
+                                                 y=PC1, 
+                                                 colour=water_system, 
+                                                 shape=haplochromine))+
+  scale_colour_manual(values = water_system_colours)+
+  stat_summary(fun = mean, geom = "point", shape = 4, colour = 'black', size = 3)+
+  xlab("Depth Preference")+
+  ylab("PC1")+
+  theme_classic()+
+  theme(legend.position='none',
+                 axis.text = element_text(size=10),
+                 axis.title = element_text(size=12, face='bold'))
+a6
+
+ggsave("Figures/Paper/pc1_by_depth_preference.jpg", a6, dpi=300, width = 10, height = 10, units = "cm")
+```
+
+```{r Plot PC2 for Piscivory and Depth}
+
+########## Diet Preference
+#plot a boxplot according to diet preference for PC2
+a5 <- ggplot(pPCA_scores_all_species_no_dd, aes(x=piscivore, y=PC2))+
+  geom_boxplot(outlier.shape = NA, linewidth=0.5)+
+  geom_jitter(size=1.50, width = 0.35, alpha=0.75, aes(x=piscivore, 
+                                                 y=PC2, 
+                                                 colour=water_system, 
+                                                 shape=haplochromine))+
+  scale_colour_manual(values = water_system_colours)+
+  stat_summary(fun = mean, geom = "point", shape = 4, colour = 'black', size = 3)+
+  xlab("Diet Preference")+
+  ylab("PC2")+
+  theme_classic()+
+  theme(legend.position='none',
+                 axis.text = element_text(size=10),
+                 axis.title = element_text(size=12, face='bold'))
+a5
+
+ggsave("Figures/Paper/PC2_by_piscivory.jpg", a5, dpi=300, width = 10, height = 10, units = "cm")
+
+########## Depth Preference
+#depth preference
+a6 <- ggplot(pPCA_scores_all_species_no_bd, aes(x=depth, y=PC2))+
+  geom_boxplot(outlier.shape = NA, linewidth=0.5)+
+  geom_jitter(size=1.50, width = 0.35, alpha=0.75, aes(x=depth, 
+                                                 y=PC2, 
+                                                 colour=water_system, 
+                                                 shape=haplochromine))+
+  scale_colour_manual(values = water_system_colours)+
+  stat_summary(fun = mean, geom = "point", shape = 4, colour = 'black', size = 3)+
+  xlab("Depth Preference")+
+  ylab("PC2")+
+  theme_classic()+
+  theme(legend.position='none',
+                 axis.text = element_text(size=10),
+                 axis.title = element_text(size=12, face='bold'))
+a6
+
+ggsave("Figures/Paper/PC2_by_depth_preference.jpg", a6, dpi=300, width = 10, height = 10, units = "cm")
+```
+
+```{r MANOVA of Depth ~ PC1 + PC2 (All Species)}
+#Fit MANOVA (Depth ~ PC1+PC2)
+depth_manova_pc1_pc2 <- procD.lm(cbind(pPCA_scores_all_species_no_bd$PC1, pPCA_scores_all_species_no_bd$PC2) ~ pPCA_scores_all_species_no_bd$depth, iter = 10000)
+summary(depth_manova_pc1_pc2)
+
+pairwise_results_depth <- pairwise(depth_manova_pc1_pc2, groups = pPCA_scores_all_species_no_bd$depth)
+summary(pairwise_results_depth)
+```
+
+```{r MANOVA of PC1 and PC2 ~ Piscivory (All Species)}
+#Fit MANOVA (Piscivore ~ PC1+PC2)
+piscivore_manova_pc1_pc2 <- procD.lm(cbind(pPCA_scores_all_species_no_dd$PC1, pPCA_scores_all_species_no_dd$PC2) ~ pPCA_scores_all_species_no_dd$piscivore, iter = 10000)
+summary(piscivore_manova_pc1_pc2)
+
+#no pairwise test necessary (only two groups) but do anyway to get effect size:
+pairwise_results_piscivore <- pairwise(piscivore_manova_pc1_pc2, groups = pPCA_scores_all_species_no_dd$piscivore)
+summary(pairwise_results_piscivore)
+```
+
+```{r Plot Effect Sizes for Depth and Piscivore MANOVA (All Species)}
+#manually create a dataframe from pairwise results
+effect_size_df <- data.frame(
+  Comparison = c("BP-DE", 
+                 "BP-PE", 
+                 "DE-PE",
+                 "NP-PI"), #adding piscivore here too 
+  Effect_Size = c(0.396, 2.429, 2.066, 1.445679),  #d-values
+  UCL_95 = c(0.452, 0.724, 0.760, 0.5118258),  #Upper confidence limits
+  p_value = c(0.093, 0.0001, 0.0001, 0.00001)  #p-values
+)
+
+a7 <- ggplot(effect_size_df, aes(x = Comparison, y = Effect_Size, fill = p_value < 0.05)) +
+  geom_col()+
+  geom_errorbar(aes(ymin = Effect_Size - UCL_95, ymax = Effect_Size + UCL_95), 
+                width = 0.2, color = "black")+
+  scale_fill_manual(values = c("red", "blue"), labels = c("Not Significant", "Significant"))+
+  geom_vline(xintercept = 3.5, linetype='dashed')+
+  ylim(-0.10, 3.5)+
+  labs(y = "Effect Size of PC1 + PC2 (d)",
+       x = 'Comparison',
+       fill = "Significance")+
+  theme_classic()+
+  theme(legend.position = "none",
+        axis.text = element_text(size = 10),
+        axis.title = element_text(size = 12, face = "bold"),
+        axis.text.x = element_text(angle = 0.00, vjust=0, hjust=0.50))
+
+a7
+
+ggsave("Figures/Paper/MANOVA_pc1_pc2_depth_effect_size.jpg", a7, dpi=300, width = 10, height = 10, units = "cm")
+```
+
+```{r MANOVA of Piscivory ~ PC1 + PC2 (Lacustrine Species)}
+
+#subset pc scores to remove riverine species
+pPCA_scores_all_species_no_dd_lacustrine <-
+  pPCA_scores_all_species_no_dd %>%
+  filter(water_system != 'RV')
+
+#Fit MANOVA (Piscivore ~ PC1+PC2)
+piscivore_manova_pc1_pc2_lacustrine <- procD.lm(cbind(pPCA_scores_all_species_no_dd_lacustrine$PC1, pPCA_scores_all_species_no_dd_lacustrine$PC2) ~ pPCA_scores_all_species_no_dd_lacustrine$piscivore, iter = 10000)
+summary(piscivore_manova_pc1_pc2_lacustrine)
+
+#no pairwise test necessary (only two groups) but do anyway to get effect size:
+pairwise_results_piscivore_lacustrine <- pairwise(piscivore_manova_pc1_pc2_lacustrine, groups = pPCA_scores_all_species_no_dd_lacustrine$piscivore)
+summary(pairwise_results_piscivore_lacustrine)
+```
+
+```{r MANOVA of Depth ~ PC1 + PC2 (Lacustrine Species)}
+
+#subset pc scores to remove riverine species
+pPCA_scores_all_species_no_bd_lacustrine <-
+  pPCA_scores_all_species_no_bd %>%
+  filter(water_system != 'RV')
+
+#Fit MANOVA (Piscivore ~ PC1+PC2)
+depth_manova_pc1_pc2_lacustrine <- procD.lm(cbind(pPCA_scores_all_species_no_bd_lacustrine$PC1, pPCA_scores_all_species_no_bd_lacustrine$PC2) ~ pPCA_scores_all_species_no_bd_lacustrine$depth, iter = 10000)
+summary(depth_manova_pc1_pc2_lacustrine)
+
+#no pairwise test necessary (only two groups) but do anyway to get effect size:
+pairwise_results_depth_lacustrine <- pairwise(depth_manova_pc1_pc2_lacustrine, groups = pPCA_scores_all_species_no_bd_lacustrine$depth)
+summary(pairwise_results_depth_lacustrine)
+```
+
+```{r Plot Effect Sizes for Depth and Piscivore MANOVA (Lacustrine Species)}
+#manually create a dataframe from pairwise results
+effect_size_df <- data.frame(
+  Comparison = c("BP-DE", 
+                 "BP-PE", 
+                 "DE-PE",
+                 "NP-PI"), #adding piscivore here too 
+  Effect_Size = c(0.6731869, 2.1474008, 1.8414303, 0.7876186),  #d-values
+  UCL_95 = c(0.4165830, 0.5688615, 0.6143704, 0.4396159),  #Upper confidence limits
+  p_value = c(0.00059994, 0.00009999, 0.00009999, 0.00019998)  #p-values
+)
+
+a7 <- ggplot(effect_size_df, aes(x = Comparison, y = Effect_Size)) +
+  geom_col(fill = "blue")+
+  geom_errorbar(aes(ymin = Effect_Size - UCL_95, ymax = Effect_Size + UCL_95), 
+                width = 0.2, color = "black") +
+  geom_vline(xintercept = 3.5, linetype = 'dashed')+
+  ylim(-0.10, 3.5)+
+  labs(y = "Effect Size of PC1 + PC2 (d)",
+       x = "Comparison",
+       fill = "Significance") +
+  theme_classic() +
+  theme(legend.position = "none",
+        axis.text = element_text(size = 10),
+        axis.title = element_text(size = 12, face = "bold"),
+        axis.text.x = element_text(angle = 0.00, vjust=0, hjust=0.50))
+
+a7
+
+
+ggsave("Figures/Paper/MANOVA_pc1_pc2_depth_effect_size_lacustrine.jpg", a7, dpi=300, width = 10, height = 10, units = "cm")
+```
+
+```{r Plot Total Count for Piscivory and Depth}
+
+########## Diet Preference
+#remove data deficients for piscivory
+all_species_no_dd <-
+  all_species_data %>%
+  filter(piscivore != 'data_deficient')
+
+# Convert the column to a factor
+all_species_no_dd$piscivore <- factor(all_species_no_dd$piscivore)
+
+# Rename the levels
+levels(all_species_no_dd$piscivore) <- c("Non-Piscivore", "Piscivore")
+
+#plot a boxplot according to diet preference for PC1
+a5 <- ggplot(all_species_no_dd, aes(x=piscivore, y=total_count))+
+  geom_boxplot(outlier.shape = NA, linewidth=0.5)+
+  geom_jitter(size=1.50, width = 0.35, alpha=0.75, aes(x=piscivore, 
+                                                 y=total_count, 
+                                                 colour=water_system, 
+                                                 shape=haplochromine))+
+  scale_colour_manual(values = water_system_colours)+
+  stat_summary(fun = mean, geom = "point", shape = 4, colour = 'black', size = 3)+
+  xlab("Diet Preference")+
+  ylab("ln[Total Count]")+
+  theme_classic()+
+  theme(legend.position='none',
+                 axis.text = element_text(size=10),
+                 axis.title = element_text(size=12, face='bold'))
+a5
+
+ggsave("Figures/Paper/total_count_by_piscivory.jpg", a5, dpi=300, width = 10, height = 10, units = "cm")
+
+
+########## Depth Preference
+
+#remove bathydemersal entry:
+all_species_no_bd <-
+  all_species_data %>%
+  filter(depth != 'bathydemersal')
+
+# Convert the column to a factor
+all_species_no_bd$depth <- factor(all_species_no_bd$depth)
+
+# Rename the levels
+levels(all_species_no_bd$depth) <- c("Benthopelagic", "Demersal", "Pelagic")
+
+#depth preference
+a6 <- ggplot(all_species_no_bd, aes(x=depth, y=total_count))+
+  geom_boxplot(outlier.shape = NA, linewidth=0.5)+
+  geom_jitter(size=1.50, width = 0.35, alpha=0.75, aes(x=depth, 
+                                                 y=total_count, 
+                                                 colour=water_system, 
+                                                 shape=haplochromine))+
+  scale_colour_manual(values = water_system_colours)+
+  stat_summary(fun = mean, geom = "point", shape = 4, colour = 'black', size = 3)+
+  xlab("Benthic-Pelagic Occupancy")+
+  ylab("ln[Total Count]")+
+  theme_classic()+
+  theme(legend.position='none',
+                 axis.text = element_text(size=10),
+                 axis.title = element_text(size=12, face='bold'))
+a6
+
+ggsave("Figures/Paper/total_count_by_depth_preference.jpg", a6, dpi=300, width = 10, height = 10, units = "cm")
+```
+
+```{r Testing Differences in Piscivores versus Non-Piscivores (ln[Total Count])}
+
+#identify species that need to be pruned (species in the tree but not in the dataframe)
+species_to_prune <- setdiff(all_species_tree$tip.label, all_species_no_dd$species_name)
+
+#prune the tree
+piscivore_tree <- drop.tip(all_species_tree, species_to_prune)
+
+#test whether difference in mean between non-piscivores and piscivores is significantly different
+piscivore_total_count_anova <-
+  phytools::phylANOVA(piscivore_tree, all_species_no_dd$piscivore, all_species_no_dd$total_count, nsim=10000, posthoc=TRUE, p.adj="holm")
+piscivore_total_count_anova
+```
+
+```{r Testing Differences in Depth Preference (ln[Total Count])}
+
+#identify species that need to be pruned (species in the tree but not in the dataframe)
+species_to_prune <- setdiff(all_species_tree$tip.label, all_species_no_bd$species_name)
+
+#prune the tree
+depth_tree <- drop.tip(all_species_tree, species_to_prune)
+
+#test whether difference in mean between non-piscivores and piscivores is significantly different
+depth_total_count_anova <-
+  phytools::phylANOVA(depth_tree, all_species_no_bd$depth, all_species_no_bd$total_count, nsim=10000, posthoc=TRUE, p.adj="holm")
+depth_total_count_anova
+```
+
+```{r Plot PC1 against PC2 for All Species by Brooding Behaviour}
+
+pPCA_scores_all_species_brooding <- 
+  pPCA_scores_all_species %>%
+  filter(mouthbrooder != 'data_deficient')
+
+#####Plot PC1 against PC2 for all species pruned in the McGee 2020 Tree:
+
+#extract the loading for PC1 and 2 (*5 for arrow size effect)
+PC1_load.x <- pPCA_all_species$L[,1] * -5 #negative here because we have multiplied PC1 by -1
+PC2_load.y <- pPCA_all_species$L[,2] * 5
+
+# Get label positions (%50 further than end of arrows)
+l.posx <- PC1_load.x*1
+l.posy <- PC2_load.y*1
+
+# Get labels for plot (variable names)
+l.labels <- row.names(pPCA_all_species$L)
+
+a1a <- ggplot()+
+  geom_point(data=pPCA_scores_all_species_brooding, aes(PC1, PC2, shape=mouthbrooder, colour=mouthbrooder), size = 1.50, alpha=0.75)+
+  stat_ellipse(data=pPCA_scores_all_species_brooding, aes(PC1, PC2, group = mouthbrooder, colour=mouthbrooder), type = "norm", level =   0.95, linetype = "solid", size=1)+
+  scale_colour_manual(values = brooding_colours)+
+  scale_shape_manual(values = brooding_shapes)+
+  xlab("PC1 (Variance explained: 64.85%)")+ #check above for variance explained
+  ylab("PC2 (Variance explained: 28.45%)")+ #check above for variance explained
+  geom_vline(xintercept = 0, linetype = 'dashed', colour='black', alpha=0.50)+
+  geom_hline(yintercept = 0, linetype = 'dashed', colour='black', alpha=0.50)+
+  xlim(-7.5, 8.5)+
+  theme_classic()+
+  theme(axis.text = element_text(size=12),
+        axis.title = element_text(size=14, face='bold'),
+        legend.position = 'none')
+a1a
+
+ggsave("Figures/Paper/all_species_pc1_pc2_brooding.pdf", a1a, width = 20, height = 10, units = "cm")
+
+```
+
+```{r Plot PC1 against PC2 for All Species by Depth Preference}
+#####Plot PC1 against PC2 for all species pruned in the McGee 2020 Tree:
+
+#extract the loading for PC1 and 2 (*5 for arrow size effect)
+PC1_load.x <- pPCA_all_species$L[,1] * -5 #negative here because we have multiplied PC1 by -1
+PC2_load.y <- pPCA_all_species$L[,2] * 5
+
+# Get label positions (%50 further than end of arrows)
+l.posx <- PC1_load.x*1
+l.posy <- PC2_load.y*1
+
+# Get labels for plot (variable names)
+l.labels <- row.names(pPCA_all_species$L)
+
+a1b <- ggplot()+
+  geom_point(data=pPCA_scores_all_species, aes(PC1, PC2, shape=depth, colour=depth), size = 1.50, alpha=0.75)+
+  stat_ellipse(data=pPCA_scores_all_species, aes(PC1, PC2, group = depth, colour=depth), type = "norm", level =   0.95, linetype = "solid", size=1)+
+  scale_colour_manual(values = depth_colours)+
+  #scale_shape_manual(values = brooding_shapes)+
+  xlab("PC1 (Variance explained: 66.40%)")+ #check above for variance explained
+  ylab("PC2 (Variance explained: 21.90%)")+
+  geom_vline(xintercept = 0, linetype = 'dashed', colour='black', alpha=0.50)+
+  geom_hline(yintercept = 0, linetype = 'dashed', colour='black', alpha=0.50)+
+  xlim(-4, 8)+
+  theme_classic()+
+  theme(axis.text = element_text(size=12),
+        axis.title = element_text(size=14, face='bold'),
+        legend.position = 'none')
+a1b
+
+ggsave("Figures/Paper/all_species_pc1_pc2_depth.pdf", a1b, width = 10, height = 10, units = "cm")
+```
+
+```{r Plot PC1 against PC2 for All Species by Piscivory}
+#filter out data_deficients: 
+
+pPCA_scores_all_species_piscivore <- 
+  pPCA_scores_all_species %>%
+  filter(piscivore != 'data_deficient')
+
+#####Plot PC1 against PC2 for all species pruned in the McGee 2020 Tree:
+
+#extract the loading for PC1 and 2 (*5 for arrow size effect)
+PC1_load.x <- pPCA_all_species$L[,1] * -5 #negative here because we have multiplied PC1 by -1
+PC2_load.y <- pPCA_all_species$L[,2] * 5
+
+# Get label positions (%50 further than end of arrows)
+l.posx <- PC1_load.x*1
+l.posy <- PC2_load.y*1
+
+# Get labels for plot (variable names)
+l.labels <- row.names(pPCA_all_species$L)
+
+a1c <- ggplot()+
+  geom_point(data=pPCA_scores_all_species_piscivore, aes(PC1, PC2, shape=piscivore, colour=piscivore), size = 1.50, alpha=0.75)+
+  stat_ellipse(data=pPCA_scores_all_species_piscivore, aes(PC1, PC2, group = piscivore, colour=piscivore), type = "norm", level =   0.95, linetype = "solid", size=1)+
+  scale_colour_manual(values = piscivore_colours)+
+  #scale_shape_manual(values = brooding_shapes)+
+  xlab("PC1 (Variance explained: 66.40%)")+ #check above for variance explained
+  ylab("PC2 (Variance explained: 21.90%)")+ #check above for variance explained
+  geom_vline(xintercept = 0, linetype = 'dashed', colour='black', alpha=0.50)+
+  geom_hline(yintercept = 0, linetype = 'dashed', colour='black', alpha=0.50)+
+  xlim(-4, 8)+
+  theme_classic()+
+  theme(axis.text = element_text(size=12),
+        axis.title = element_text(size=14, face='bold'),
+        legend.position = 'none')
+a1c
+
+ggsave("Figures/Paper/all_species_pc1_pc2_piscivore.pdf", a1c, width = 10, height = 10, units = "cm")
+```
+
+```{r Plot Total Count and Aspect Ratio Correlation}
+
+#total_count_aspect_ratio <- readRDS('Data/total_count_aspect_ratio.rds')
+
+#define dataframe containing mean values for common ancestor (i.e. root)
+mrca <- c("total_count" = 3.342846, "ln_length_ln_width" = 0.9857241)
+mrca_df <- data.frame(total_count = mrca["total_count"], 
+                      ln_length_ln_width = mrca["ln_length_ln_width"])
+
+#plot total count against aspect ratio
+a3 <- ggplot(data = all_species_data, aes(x = total_count, y = ln_length_ln_width, shape=haplochromine, colour=water_system))+
+  geom_point(size = 1.50, alpha=0.75)+
+  scale_colour_manual(values = water_system_colours)+
+  geom_abline(intercept = -4.078, 
+              slope = 1.497, 
+              size = 0.75, colour = 'black', linetype = 'solid')+ #ols is black
+  geom_abline(intercept = -4.10876, 
+              slope = 1.51067, 
+              size = 0.75, colour = 'red', linetype = 'dashed')+#pgls is red
+  geom_point(data = mrca_df, aes(x = total_count, y = ln_length_ln_width), 
+             size = 3, colour = '#CC79A7', shape = 17)+
+  xlab("ln[Total Count]")+
+  ylab("ln[Length] - ln[Depth]")+
+  theme_classic()+
+  theme(legend.position='none',
+                 axis.text = element_text(size=12),
+                 axis.title = element_text(size=12, face='bold'))
+a3
+
+ggsave("Figures/Paper/aspect_ratio_total_count.jpg", a3, dpi=600, width = 10, height = 10, units = "cm")
+```
+
+```{r Plot Anterior and Posterior Aspect Ratios}
+
+#anterior_aspect_posterior_aspect <- readRDS('Data/anterior_aspect_posterior_aspect.rds')
+
+#define dataframe containing mean values for common ancestor (i.e. root)
+mrca <- c("ln_post_length_ln_width" = 0.6279227, "ln_ant_length_ln_width" = -0.1483828)
+mrca_df <- data.frame(ln_post_length_ln_width = mrca["ln_post_length_ln_width"], 
+                      ln_ant_length_ln_width = mrca["ln_ant_length_ln_width"])
+
+#plot the variables 
+a4 <- ggplot(data = all_species_data, aes(x = ln_post_length_ln_width, y = ln_ant_length_ln_width, shape=haplochromine, colour=water_system))+
+  geom_point(size = 1.50, alpha=0.50)+
+  scale_colour_manual(values = water_system_colours)+
+  geom_abline(intercept = -0.6566, 
+              slope = 0.7318, 
+              size = 0.75, colour = 'black', linetype = 'solid')+ #ols is black
+  geom_abline(intercept = -0.603102, 
+              slope = 0.700286, 
+              size = 0.75, colour = 'red', linetype = 'dashed')+#pgls is red
+  geom_point(data = mrca_df, aes(x = ln_post_length_ln_width, y = ln_ant_length_ln_width), 
+             size = 3, colour = '#CC79A7', shape = 17)+
+  #scale_x_continuous(breaks = seq(0.50, 2.0, by=0.10))+
+  #geom_hline(yintercept = -0.30990276)+
+  #geom_vline(xintercept = 0.4446673)+
+  xlab("ln[Posterior Length] - ln[Depth]")+
+  ylab("ln[Anterior Length] - ln[Depth]")+
+  theme_classic()+
+  theme(legend.position='none',
+                 axis.text = element_text(size=12),
+                 axis.title = element_text(size=12, face='bold'))
+a4
+
+
+ggsave("Figures/Paper/ant_post_aspect_ratio.jpg", a4, dpi=600, width = 10, height = 10, units = "cm")
+
+
+mean(all_species_data$ln_ant_length_ln_width) #-0.1119391
+sd(all_species_data$ln_ant_length_ln_width) #0.1927954
+
+#z = -0.1890279 (anterior)
+#z = -0.5094978 (posterior)
+
+mean(all_species_data$ln_post_length_ln_width) #0.7442862
+sd(all_species_data$ln_post_length_ln_width) #0.2283886
+
+```
+
+```{r Plot Aspect Ratio Distribution for All Species}
+
+#provide bounds of the x-axis for histogram
+min(all_species_data$ln_length_ln_width)
+max(all_species_data$ln_length_ln_width)
+
+#calculate the mean and standard deviation of the ln_length_ln_width variable
+mean_value_aspect_ratio <- mean(all_species_data$ln_length_ln_width, na.rm = TRUE)
+sd_value_aspect_ratio <- sd(all_species_data$ln_length_ln_width, na.rm = TRUE)
+
+#plot histogram plot with dashed lines for the mean, mean+sd, and mean-sd
+a4 <- ggplot(all_species_data, aes(x = ln_length_ln_width)) +
+  geom_histogram(aes(y = after_stat(density)), colour='black', binwidth = 0.10, fill = 'grey')+ 
+  #geom_density(alpha = 0.5, colour = 'blue')+ #add density curve
+  xlab("ln[Length] - ln[Width]")+
+  ylab("Density")+
+  geom_vline(aes(xintercept = mean_value_aspect_ratio), linetype = "dashed", colour = "red") +
+  geom_vline(aes(xintercept = mean_value_aspect_ratio + sd_value_aspect_ratio), linetype = "dashed", colour = "blue") +
+  geom_vline(aes(xintercept = mean_value_aspect_ratio - sd_value_aspect_ratio), linetype = "dashed", colour = "blue") +
+  xlim(0.50, 2.50)+
+  theme_classic()+
+  theme(legend.position='none',
+                 axis.text = element_text(size=12),
+                 axis.title = element_text(size=12, face='bold'))
+
+a4
+
+ggsave("Figures/Paper/aspect_ratio_distribution.pdf", a4, width = 10, height = 10, units = "cm")
+```
+
+```{r Plot Total Count Distribution for All Species}
+
+#provide bounds of the x-axis for histogram
+min(all_species_data$total_count)
+max(all_species_data$total_count)
+
+#calculate the mean and standard deviation of the total_count
+mean_value_total_count <- mean(all_species_data$total_count, na.rm = TRUE)
+sd_value_total_count <- sd(all_species_data$total_count, na.rm = TRUE)
+
+#plot histogram plot with dashed lines for the mean, mean+sd, and mean-sd
+a5 <- ggplot(all_species_data, aes(x = total_count)) +
+  geom_histogram(aes(y = after_stat(density)), colour='black', binwidth = 0.05, fill = 'grey')+ 
+  #geom_density(alpha = 0.5, colour = 'blue')+ #add density curve
+  xlab("ln[Total Count]")+
+  ylab("Density")+
+  geom_vline(aes(xintercept = mean_value_total_count), linetype = "dashed", colour = "red") +
+  geom_vline(aes(xintercept = mean_value_total_count + sd_value_total_count), linetype = "dashed", colour = "blue") +
+  geom_vline(aes(xintercept = mean_value_total_count - sd_value_total_count), linetype = "dashed", colour = "blue") +
+  #xlim(3.20, 3.70)+
+  theme_classic()+
+  theme(legend.position='none',
+                 axis.text = element_text(size=12),
+                 axis.title = element_text(size=12, face='bold'))
+
+a5
+
+ggsave("Figures/Paper/total_count_distribution.pdf", a5, width = 10, height = 10, units = "cm")
+```
+
+```{r Plot PC:C by Water System}
+# Create a vector of alpha values based on haplochromine column
+alpha_values <- rep(1.00, nrow(vertebral_counts_no_missing))
+alpha_values[vertebral_counts_no_missing$ln_pc_ln_c < 0.00] <- 0.50
+
+# Create a vector of alpha values based on haplochromine column
+shape_size <- rep(1.50, nrow(vertebral_counts_no_missing))
+shape_size[vertebral_counts_no_missing$ln_pc_ln_c < 0.00] <- 1.00  
+
+#define dataframe containing mean values for common ancestor (i.e. root)
+mrca_boxplot <- data.frame(
+  water_system = "RV",
+  ln_pc_ln_c = -0.09061365)
+
+#plot the precaudal:caudal ratio by water_system
+b1 <- ggplot(data = vertebral_counts_no_missing, aes(x = water_system, y = ln_pc_ln_c)) +
+  geom_boxplot(outlier.shape = NA, linewidth=0.5) +
+  geom_jitter(data = vertebral_counts_no_missing, aes(x = water_system, 
+                                                      y = ln_pc_ln_c, 
+                                                      colour=water_system, 
+                                                      shape=haplochromine, 
+                                                      alpha=alpha_values,
+                                                      size = shape_size), width = 0.35)+
+  scale_colour_manual(values = water_system_colours)+
+  scale_alpha_identity()+
+  scale_size_identity()+
+  stat_summary(fun = mean, geom = "point", shape = 4, colour = 'black', size = 3)+
+  geom_hline(yintercept = 0.00, linetype = "dashed", colour = 'black', size = 0.75)+
+  geom_point(data = mrca_boxplot, aes(x = water_system, y = ln_pc_ln_c),
+             size = 3, colour = '#CC79A7', shape = 17)+
+  xlab("Water System")+
+  ylab("ln[Precaudal] - ln[Caudal]")+
+  theme_classic()+
+  theme(legend.position='none',
+                 axis.text = element_text(size=12),
+                 axis.title = element_text(size=12, face='bold'))
+b1
+
+ggsave("Figures/Paper/precaudal_caudal_ratio_plot.jpg", b1, dpi=600, width = 10, height = 10, units = "cm")
+```
+
+```{r Plot Total Count by Water System}
+
+#define dataframe containing mean values for common ancestor (i.e. root)
+mrca_boxplot <- data.frame(
+  water_system = "RV",
+  total_count = 3.342846)
+
+#lacustrine <- 
+  #all_species_data %>%
+  #filter(water_system != 'RV')
+
+#add combined lacustrine box
+#lacustrine_all <- lacustrine %>%
+  #mutate(water_system = "LA")
+#combined_data <- bind_rows(vertebral_counts_no_missing, lacustrine_all)
+
+#recode factors so that order is correct
+#combined_data$water_system <- factor(combined_data$water_system, 
+                                                  #levels = c("LV", "LM", "LT", "LA", "RV"))
+
+###plot total count by water_system:
+b2 <- ggplot(data = vertebral_counts_no_missing, aes(x = water_system, y = total_count))+
+  #geom_hline(yintercept = 3.3841, linetype = "dashed", colour = 'black', size = 0.75)+ #median riverine theta (optima)
+  #geom_hline(yintercept = 3.4829, linetype = "dashed", colour = 'black', size = 0.75)+ #median lacustrine theta (optima)
+  geom_boxplot(outlier.shape = NA, linewidth=0.5)+
+  geom_jitter(data = vertebral_counts_no_missing, aes(x = water_system, 
+                                                      y = total_count,
+                                                      colour=water_system, 
+                                                      shape=haplochromine), size=1.50, width = 0.35, alpha=0.50)+
+  scale_colour_manual(values = water_system_colours)+
+  stat_summary(fun = mean, geom = "point", shape = 4, colour = 'black', size = 3)+
+  geom_point(data = mrca_boxplot, aes(x = water_system, y = total_count),
+             size = 3, colour = '#CC79A7', shape = 17)+
+  xlab("Water System") +
+  ylab("ln[Total Count]") +
+  theme_classic()+
+  theme(legend.position='none',
+                 axis.text = element_text(size=12),
+                 axis.title = element_text(size=12, face='bold'))
+b2
+
+ggsave("Figures/Paper/total_count_plot.jpg", b2, dpi=600, width = 10, height = 10, units = "cm")
+```
+
+
+
+
+

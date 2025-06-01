@@ -1,0 +1,287 @@
+---
+title: "OUwie AICc Model Fits"
+author: "Callum Bucklow"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r Setup, include=FALSE}
+knitr::opts_chunk$set(message = FALSE) ##Remove messages for all chunks
+knitr::opts_chunk$set(warning = FALSE) ##Remove warnings for all chunks
+```
+
+```{r Libraries}
+# Load the necessary libraries
+library(tidyverse) #data wrangling
+library(tidyr) #data wrangling
+library(dplyr)
+library(ggplot2) #for plotting when I don't want to use Base R
+library(gridExtra) #for ggplot, to plot multiple plots together
+library(fitdistrplus) #for fitting distributions to data
+library(ape) #for phylogeny manipulation and all the rest
+library(phytools) #for various things, including phylogenetic PCA, PGLM etc.
+library(nlme) #for pgls
+library(geiger) #for fitting trait evolution models to phylogenies
+library(OUwie) #for fitting multiple regime OU models to trait evolution models
+library(caper) #for pgls and will report pseudo-r2 for these models
+```
+
+```{r Import Filtered OUwie Results}
+
+ouwie_all_results_water_system_filtered <- 
+  readRDS('Data/ouwie_all_results_water_system_filtered.rds')
+
+ouwie_all_results_depth_filtered <- 
+  readRDS('Data/ouwie_all_results_depth_filtered.rds')
+
+ouwie_all_results_piscivore_filtered <- 
+  readRDS('Data/ouwie_all_results_piscivore_filtered.rds')
+
+ouwie_all_results_riverine_lacustrine_filtered_no_OUMVA <- 
+  readRDS('Data/ouwie_all_results_riverine_lacustrine_filtered_no_OUMVA.rds')
+
+ouwie_all_results_riverine_lacustrine_filtered_OUMVA <- 
+  readRDS('Data/ouwie_all_results_riverine_lacustrine_OUMVA_filtered.rds')
+
+ouwie_all_results_tribe_filtered <- 
+  readRDS('Data/ouwie_all_results_tribe_filtered.rds')
+
+```
+
+```{r Function to Extract AICc Values from OUwie Results Lists}
+
+extract_aicc <- function(results_list) {
+  aicc_df <- do.call(rbind, lapply(seq_along(results_list), function(i) {
+    result <- results_list[[i]]
+    data.frame(
+      tree_index = paste0("tree_", i),
+      model = c("BM1", "OU1", "BMS", "OUM", "OUMV", "OUMA", "OUMVA"),
+      AICc = sapply(c("BM1", "OU1", "BMS", "OUM", "OUMV", "OUMA", "OUMVA"), function(model) {
+        if (!is.null(result$fits[[model]])) {
+          result$fits[[model]]$AICc
+        } else {
+          NA
+        }
+      })
+    )
+  }))
+  return(aicc_df)
+}
+
+```
+
+```{r Extract AICc Values}
+#create a named list of inputs
+input_ouwie_lists <- list(
+  water_system = ouwie_all_results_water_system_filtered,
+  depth = ouwie_all_results_depth_filtered,
+  piscivore = ouwie_all_results_piscivore_filtered,
+  riverine_lacustrine_no_OUMVA = ouwie_all_results_riverine_lacustrine_filtered_no_OUMVA,
+  riverine_lacustrine_OUMVA = ouwie_all_results_riverine_lacustrine_filtered_OUMVA,
+  tribe = ouwie_all_results_tribe_filtered
+)
+
+#apply the extract_aicc function to each element of the list
+aicc_results <- lapply(input_ouwie_lists, extract_aicc)
+
+#combine results into a single dataframe for further analysis
+combined_aicc_results <- do.call(rbind, aicc_results)
+
+#assuming your dataframe is named 'aicc_results'
+combined_aicc_results$regime <- sub("\\..*$", "", rownames(combined_aicc_results))
+
+#reset rownames if you want a cleaner dataframe
+rownames(combined_aicc_results) <- NULL
+
+#rename weird regime names due to OUMVA missing 
+combined_aicc_results$regime[combined_aicc_results$regime %in% c(
+  "riverine_lacustrine_no_OUMVA", 
+  "riverine_lacustrine_OUMVA"
+)] <- "riverine_lacustrine"
+
+#replace NA values for BM1 and OU1 with the values:
+combined_aicc_results <- combined_aicc_results %>% 
+  mutate(AICc = case_when(
+    model == "BM1" & is.na(AICc) ~ -538.2044,
+    model == "OU1" & is.na(AICc) ~ -910.0188 ,
+    TRUE ~ AICc                       
+  ))
+```
+
+```{r Plot the AICc Results}
+
+a1 <- ggplot(combined_aicc_results, aes(x=regime, y=AICc, colour=model))+
+  geom_boxplot()+
+  ylim(-1500, -500)+
+  theme_classic()
+a1
+
+a2 <- ggplot(combined_aicc_results, aes(x=regime, y=AICc, colour=model))+
+  geom_boxplot()+
+  ylim(-2000, -500)+
+  theme_classic()
+a2
+
+ggsave("Figures/OUwie Results/all_aicc_results_by_regime.jpeg", 
+       plot = a2, dpi=300, width = 12, height = 10, units = 'cm')
+
+
+a3 <- ggplot(combined_aicc_results, aes(x=model, y=AICc, colour=regime))+
+  geom_boxplot()+
+  ylim(-1500, -500)+
+  theme_classic()
+a3
+
+ggsave("Figures/OUwie Results/all_aicc_results_by_model.jpeg", 
+       plot = a3, dpi=300, width = 12, height = 10, units = 'cm')
+
+```
+
+```{r Calculate AICc Weights Between Regimes}
+
+#filter out model fits that likely got stuck at saddlepoints
+combined_aicc_results <- #3500
+  combined_aicc_results %>%
+  filter(AICc > -2000)  
+
+#calculate AICc weights
+combined_aicc_results_weights <- combined_aicc_results %>%
+  filter(!is.na(AICc)) %>%  # Remove rows with NA AICc
+  group_by(regime, tree_index) %>%  #group by regime and tree index
+  mutate(
+    delta_AICc = AICc - min(AICc),  #calculate dAICc
+    likelihood = exp(-0.5 * delta_AICc),  #calculate likelihood
+    weight = likelihood / sum(likelihood)  #calculate AICc weight
+  ) %>%
+  ungroup()  #remove grouping
+```
+
+```{r Plot AICc Weights}
+
+a4 <- ggplot(combined_aicc_results_weights, aes(x=regime, y=weight, colour=model))+
+  geom_boxplot()+
+  theme_classic()
+a4
+
+ggsave("Figures/OUwie Results/all_aicc_weights_by_regime.jpeg", 
+       plot = a4, dpi=300, width = 12, height = 10, units = 'cm')
+
+
+a5 <- ggplot(combined_aicc_results_weights, aes(x=model, y=weight, colour=regime))+
+  geom_boxplot()+
+  theme_classic()
+a5
+
+ggsave("Figures/OUwie Results/all_aicc_weights_by_model.jpeg", 
+       plot = a5, dpi=300, width = 12, height = 10, units = 'cm')
+```
+
+```{r Plot AICc Weights for Water System}
+water_system_aicc_weights <- 
+  combined_aicc_results_weights %>%
+  filter(regime == 'water_system')
+  
+
+a6 <- ggplot(water_system_aicc_weights, aes(x=model, y=weight))+
+  geom_boxplot()+
+  geom_jitter()+
+  ylab("AICc Weight (within Regime) - Water System")+
+  xlab("Model")+
+  theme_classic()
+a6
+
+ggsave("Figures/OUwie Results/aicc_weights_water_system.jpeg", 
+       plot = a6, dpi=300, width = 12, height = 10, units = 'cm')
+```
+
+```{r Plot AICc Weights for Depth Preference}
+depth_aicc_weights <- 
+  combined_aicc_results_weights %>%
+  filter(regime == 'depth')
+  
+
+a7 <- ggplot(depth_aicc_weights, aes(x=model, y=weight))+
+  geom_boxplot()+
+  geom_jitter()+
+  ylab("AICc Weight (within Regime - Depth)")+
+  xlab("Model")+
+  theme_classic()
+a7
+
+ggsave("Figures/OUwie Results/aicc_weights_depth.jpeg", 
+       plot = a7, dpi=300, width = 12, height = 10, units = 'cm')
+```
+
+```{r Plot AICc Weights for Piscivory}
+piscivore_aicc_weights <- 
+  combined_aicc_results_weights %>%
+  filter(regime == 'piscivore')
+
+a8 <- ggplot(piscivore_aicc_weights, aes(x=model, y=weight))+
+  geom_boxplot()+
+  geom_jitter()+
+  ylab("AICc Weight (within Regime - Piscivory)")+
+  xlab("Model")+
+  theme_classic()
+a8
+
+ggsave("Figures/OUwie Results/aicc_weights_piscivore.jpeg", 
+       plot = a8, dpi=300, width = 12, height = 10, units = 'cm')
+```
+
+```{r Plot AICc Weights for Riverine or Lacustrine}
+
+riverine_lacustrine_aicc_weights <- 
+  combined_aicc_results_weights %>%
+  filter(regime == 'riverine_lacustrine')
+
+a9 <- ggplot(riverine_lacustrine_aicc_weights, aes(x=model, y=weight))+
+  geom_boxplot()+
+  geom_jitter()+
+  ylab("AICc Weight (within Regime - Riverine or Lacustrine)")+
+  xlab("Model")+
+  theme_classic()
+a9
+
+ggsave("Figures/OUwie Results/aicc_weights_riverine_lacustrine.jpeg", 
+       plot = a9, dpi=300, width = 12, height = 10, units = 'cm')
+
+```
+
+
+```{r Plot AICc Weights for Tribe}
+
+tribe_aicc_weights <- 
+  combined_aicc_results_weights %>%
+  filter(regime == 'tribe')
+
+help <- tribe_aicc_weights %>%
+  filter(model == 'OUMVA')
+
+median(help$AICc)
+
+a10 <- ggplot(tribe_aicc_weights, aes(x=model, y=weight))+
+  geom_boxplot()+
+  geom_jitter()+
+  ylab("AICc Weight (within Regime - Riverine or Lacustrine)")+
+  xlab("Model")+
+  theme_classic()
+a10
+
+ggsave("Figures/OUwie Results/aicc_weights_tribe.jpeg", 
+       plot = a10, dpi=300, width = 12, height = 10, units = 'cm')
+
+```
+
+```{r}
+median_aicc_weight <- 
+  combined_aicc_results_weights %>%
+  group_by(model, regime) %>%
+  summarise(median_aicc_weight = median(weight))
+
+write.csv(median_aicc_weight, "~/Desktop/median_aicc_weights.csv")
+```
+
+
+
+

@@ -1,0 +1,296 @@
+---
+title: "Correlating Aspect Ratios and Total Counts"
+author: "Callum Bucklow"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r Setup, include=FALSE}
+knitr::opts_chunk$set(message = FALSE) ##Remove messages for all chunks
+knitr::opts_chunk$set(warning = FALSE) ##Remove warnings for all chunks
+```
+
+```{r Libraries}
+# Load the necessary libraries
+library(tidyverse) #data wrangling
+library(tidyr) #data wrangling
+library(dplyr)
+library(ggplot2) #for plotting when I don't want to use Base R
+library(gridExtra) #for ggplot, to plot multiple plots together
+library(fitdistrplus) #for fitting distributions to data
+library(ape) #for phylogeny manipulation and all the rest
+library(phytools) #for various things, including phylogenetic PCA, PGLM etc.
+library(nlme) #for pgls
+library(geiger) #for fitting trait evolution models to phylogenies
+library(OUwie) #for fitting multiple regime OU models to trait evolution models
+library(caper) #for pgls and will report pseudo-r2 for these models
+```
+
+```{r Function to Extract Linear Model Coefficients}
+model_summary_stats <- function(model) {
+  # Generate the summary of the model
+  model_summary <- summary(model)
+  
+  # Extract F-statistic, adjusted R-squared, and degrees of freedom
+  intercept <- model_summary$coefficient[[1]]
+  slope <- model_summary$coefficient[[2]]
+  f_statistic <- model_summary$fstatistic[[1]]
+  adjusted_r_squared <- model_summary$adj.r.squared
+  df_num <- model_summary$fstatistic[[2]]
+  df_dom <- model_summary$fstatistic[[3]]
+  p_value_main_effect <- pf(f_statistic, df_num, df_dom, lower.tail = FALSE)
+  
+  # Return a list with the extracted values
+  return(list(
+    intercept = intercept,
+    slope = slope,
+    F_statistic = f_statistic,
+    adjusted_R_squared = adjusted_r_squared,
+    df = df_dom - df_num,
+    p_value = p_value_main_effect
+  ))
+}
+```
+
+```{r Data Import and Wrangling}
+
+#import all_species data
+all_species <- readRDS('Data/all_species.rds')
+
+#store in dataframe for analysis
+all_species_data <- as.data.frame(cbind(all_species$matrix_data, "species_name" = all_species$stored_data$species_name))
+
+#all_species_data$relative_posterior_elongation <- all_species_data$ln_ant_length_ln_width - all_species_data$ln_post_length_ln_width
+
+#reformat data:
+columns_not_numeric <- c("species_name")
+
+#convert all columns except those in `columns_not_numeric` to numeric
+all_species_data <- all_species_data %>%
+  mutate(across(-all_of(columns_not_numeric), as.numeric))
+
+#recombine with stored qualitative data
+all_species_data <- left_join(all_species$stored_data, all_species_data, by='species_name')
+```
+
+# Construct VCV Matrix (Caper) for Downstream Analysis
+
+```{r Construct VCV Matrix for Downstream Analysis}
+#encode lake systems as 1 or 0
+all_species_data$water_system_binary <- ifelse(all_species_data$water_system == "Riverine", 1, 0)
+
+#construct the vcv matrix:
+aspect_total <- caper::comparative.data(all_species$tree, all_species_data, species_name, vcv=TRUE, vcv.dim=3)
+```
+
+```{r Define Model to Fit OLS and Multiple PGLS Models}
+fit_pgls_models <- function(data, response, predictor, interaction = NULL, model_type = "additive") {
+  if (model_type == "interaction" && !is.null(interaction)) {
+    #interaction model
+    formula <- as.formula(paste(response, "~", predictor, "*", interaction))
+  } else if (model_type == "additive" && !is.null(interaction)) {
+    #additive model
+    formula <- as.formula(paste(response, "~", predictor, "+", interaction))
+  } else {
+    #simple model with only the predictor
+    formula <- as.formula(paste(response, "~", predictor))
+  }
+  
+  #fit the models
+  all.ols <- lm(data = data$data, formula)
+  all.pgls.fixed <- caper::pgls(formula, data, lambda = 1.00, delta = 1.00, kappa = 1.00)
+  all.pgls.lambda <- caper::pgls(formula, data, lambda = 'ML', delta = 1.00, kappa = 1.00)
+  all.pgls.delta <- caper::pgls(formula, data, lambda = 1.00, delta = 'ML', kappa = 1.00)
+  all.pgls.kappa <- caper::pgls(formula, data, lambda = 1.00, delta = 1.00, kappa = 'ML')
+  
+  #store model fits into a list
+  model_fits <- list(all.ols, 
+                     all.pgls.fixed, 
+                     all.pgls.lambda, 
+                     all.pgls.delta, 
+                     all.pgls.kappa)
+  
+  #compare the models using AIC
+  aic_values <- AIC(all.ols, 
+                    all.pgls.fixed, 
+                    all.pgls.lambda, 
+                    all.pgls.delta, 
+                    all.pgls.kappa)
+  
+  #return both the model fits and AIC values
+  results <- list(
+    model_fits = model_fits,
+    aic_values = aic_values
+  )
+  
+  return(results)
+}
+```
+
+```{r Function to Calculate AIC Weights from Model Fits}
+calculate_aic_weights <- function(aic_data, aic_column) {
+  #check
+  if (!aic_column %in% colnames(aic_data)) {
+    stop("The specified AIC column does not exist in the data.")
+  }
+  
+  #calculate dAIC
+  aic_data$delta <- aic_data[[aic_column]] - min(aic_data[[aic_column]])
+  
+  #calculate elative likelihoods
+  aic_data$RL <- exp(-0.5 * aic_data$delta)
+  
+  #calculate AIC weights
+  aic_data$weight <- aic_data$RL / sum(aic_data$RL)
+  
+  return(aic_data)
+}
+```
+
+```{r Fit Multiple Models}
+
+#y ~ x 
+
+#ln_length_ln_width ~ total_count
+#total_count_aspect_ratio <- fit_pgls_models(aspect_total, "ln_length_ln_width", "total_count")
+#saveRDS(total_count_aspect_ratio, 'Data/total_count_aspect_ratio.rds')
+
+#ln_ant_length_ln_width ~ ln_post_length_ln_width
+#anterior_aspect_posterior_aspect <- fit_pgls_models(aspect_total, "ln_ant_length_ln_width", "ln_post_length_ln_width")
+#saveRDS(anterior_aspect_posterior_aspect, 'Data/anterior_aspect_posterior_aspect.rds')
+
+#ln_ant_length_ln_width ~ total_count
+#total_count_anterior_aspect <- fit_pgls_models(aspect_total, "ln_ant_length_ln_width", "total_count")
+#saveRDS(total_count_anterior_aspect, 'Data/total_count_anterior_aspect.rds')
+
+#ln_post-length_ln_width ~ total_count
+#total_count_posterior_aspect <- fit_pgls_models(aspect_total, "ln_post_length_ln_width", "total_count")
+#saveRDS(total_count_posterior_aspect, 'Data/total_count_posterior_aspect.rds')
+
+#ln_length_ln_width ~ ln_post_ln_length_ln_width
+#posterior_aspect_whole_body_aspect <- fit_pgls_models(aspect_total, "ln_length_ln_width", "ln_post_length_ln_width")
+#saveRDS(posterior_aspect_whole_body_aspect, 'Data/posterior_aspect_whole_body_aspect.rds')
+
+#ln_length_ln_width ~ ln_ant_ln_length_ln_width
+#anterior_aspect_whole_body_aspect <- fit_pgls_models(aspect_total, "ln_length_ln_width", "ln_ant_length_ln_width")
+#saveRDS(anterior_aspect_whole_body_aspect, 'Data/anterior_aspect_whole_body_aspect.rds')
+```
+
+```{r Test for Sig Difference in ln[TC] Variance Between Riverine and Lacustrine}
+
+#fit a PGLS model with only an intercept (to get phylogenetically corrected residuals)
+pgls_model <- pgls(total_count ~ 1, aspect_total, lambda = "ML")
+
+summary(pgls_model)
+
+#extract residuals (phylogenetically corrected trait values)
+phylo_corrected_residuals <- residuals(pgls_model)
+
+#add to dataframe
+all_species_data$phylo_residuals <- as.numeric(phylo_corrected_residuals)
+
+#define riverine_lacustrine
+all_species_data$riverine_lacustrine <- ifelse(all_species_data$water_system_binary == '1', 'Riverine', 'Lacustrine')
+all_species_data$riverine_lacustrine <- as.factor(all_species_data$riverine_lacustrine)
+
+#test whether the variance in the residuals is significantly different
+library(car)
+leveneTest(phylo_residuals ~ riverine_lacustrine, data = all_species_data, centre='median')
+
+#group_together variances
+riverine_lacustrine_variance <- all_species_data %>%
+  group_by(riverine_lacustrine) %>%
+  summarise(var_phylo_corrected = var(phylo_residuals, na.rm = TRUE)) #calculate variance of residuals for riverine and lacustrine species
+
+#calculate the variance ratio (i.e. how much larger is the riverine variance compared to lacustrine variance when phylogeny corrected)
+var_ratio <- riverine_lacustrine_variance$var_phylo_corrected[2] / riverine_lacustrine_variance$var_phylo_corrected[1]
+var_ratio
+```
+
+```{r Import the Model Fits}
+#importing to avoid having to redo the analysis each time
+total_count_aspect_ratio <- readRDS('Data/total_count_aspect_ratio.rds')
+total_count_anterior_aspect <- readRDS('Data/total_count_anterior_aspect.rds')
+total_count_posterior_aspect <- readRDS('Data/total_count_posterior_aspect.rds')
+anterior_aspect_posterior_aspect <- readRDS('Data/anterior_aspect_posterior_aspect.rds')
+posterior_aspect_whole_body_aspect <- readRDS('Data/posterior_aspect_whole_body_aspect.rds')
+anterior_aspect_whole_body_aspect <- readRDS('Data/anterior_aspect_whole_body_aspect.rds')
+```
+
+```{r Calculate AIC Weights for Each Model Fit}
+
+#calculate AIC weights for aspect_ratio ~ total_count
+total_count_aspect_ratio$aic_values <- calculate_aic_weights(
+  total_count_aspect_ratio$aic_values, 
+  "AIC"
+)
+#output the results
+total_count_aspect_ratio$aic_values #kappa variable
+
+#calculate AIC weights for anterior aspect ratio  ~ posterior aspect ratio
+anterior_aspect_posterior_aspect$aic_values <- calculate_aic_weights(
+  anterior_aspect_posterior_aspect$aic_values, 
+  "AIC"
+)
+#output the results
+anterior_aspect_posterior_aspect$aic_values #lambda variable
+
+
+#calculate AIC weights for anterior aspect ratio  ~ total count
+total_count_anterior_aspect$aic_values <- calculate_aic_weights(
+  total_count_anterior_aspect$aic_values, 
+  "AIC"
+)
+
+#output the results
+total_count_anterior_aspect$aic_values #kappa variable
+
+
+#calculate AIC weights for posterior aspect ratio  ~ total count
+total_count_posterior_aspect$aic_values <- calculate_aic_weights(
+  total_count_posterior_aspect$aic_values, 
+  "AIC"
+)
+#output the results
+total_count_posterior_aspect$aic_values #kappa variable 
+
+
+#calculate AIC weights for ln_length_ln_width ~ posterior aspect
+posterior_aspect_whole_body_aspect$aic_values <- calculate_aic_weights(
+  posterior_aspect_whole_body_aspect$aic_values, 
+  "AIC"
+)
+
+#output the results
+posterior_aspect_whole_body_aspect$aic_values #lambda variable
+
+#calculate AIC weights for ln_length_ln_width ~ posterior aspect
+anterior_aspect_whole_body_aspect$aic_values <- calculate_aic_weights(
+  anterior_aspect_whole_body_aspect$aic_values, 
+  "AIC"
+)
+#output the results
+anterior_aspect_whole_body_aspect$aic_values #lambda variable
+
+```
+
+```{r Summarise Best Fitting Models}
+#total_count_aspect_ratio
+summary(total_count_aspect_ratio$model_fits[[3]]) #lambda variable
+
+#anterior_aspect_posterior_aspect
+summary(anterior_aspect_posterior_aspect$model_fits[[3]]) #lambda variable
+
+#total_count_anterior_aspect
+summary(total_count_anterior_aspect$model_fits[[3]]) #lambda variable
+
+#total_count_posterior_aspect
+summary(total_count_posterior_aspect$model_fits[[3]]) #lambda variable
+
+#posterior_aspect_whole_body_aspect
+summary(posterior_aspect_whole_body_aspect$model_fits[[3]]) #lambda variable
+
+#anterior_aspect_whole_body_aspect
+summary(anterior_aspect_whole_body_aspect$model_fits[[3]]) #lambda variable
+
+```

@@ -1,0 +1,316 @@
+---
+title: "Fit Multiple OU Models to Discrete Mapping Data using OUwie (Tribe)"
+author: "Callum Bucklow"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r Setup, include=FALSE}
+knitr::opts_chunk$set(message = FALSE) ##Remove messages for all chunks
+knitr::opts_chunk$set(warning = FALSE) ##Remove warnings for all chunks
+```
+
+```{r Libraries}
+# Load the necessary libraries
+library(tidyverse) #data wrangling
+library(tidyr) #data wrangling
+library(dplyr)
+library(ggplot2) #for plotting when I don't want to use Base R
+library(gridExtra) #for ggplot, to plot multiple plots together
+library(fitdistrplus) #for fitting distributions to data
+library(ape) #for phylogeny manipulation and all the rest
+library(phytools) #for various things, including phylogenetic PCA, PGLM etc.
+library(nlme) #for pgls
+library(geiger) #for fitting trait evolution models to phylogenies
+library(OUwie) #for fitting multiple regime OU models to trait evolution models
+library(caper) #for pgls and will report pseudo-r2 for these models
+```
+
+# Fitting Multiple OU Models to Tribal Simmap
+
+```{r Import Water System Simmap}
+all_species_tribe_simmap <- readRDS('Data/all_species_tribe_simmap.rds')
+```
+
+```{r Prepare All Species Data with their Water System Occupancy}
+#remember we are using the tree that has been pruned to those for which we know whether they are piscivorous or not
+
+#import qualitative data
+all_species_stored_data_piscivore <-
+  read.csv('Data/all_species_stored_data_piscivore.csv')
+
+#import quant data
+all_species_matrix_data_piscivore <-  read.csv('Data/all_species_matrix_data_piscivore.csv')
+
+#import piscivore pruned tree:
+all_species_tree_piscivore_pruned <- read.tree('Data/all_species_tree_piscivore_pruned.txt')
+
+#save edge lengths
+all_species_tree_tribe_pruned_edges <- all_species_tree_piscivore_pruned$edge.length
+
+#create trait variable for fitting discrete models:
+all_species_tribe <- all_species_stored_data_piscivore$tribe
+#collapse the tribes into basal riverine, haplochromini or lake_tanganyika:
+#define the haplochromini tribes/subtribes
+haplochromini <- c("Basal Haplochromini", "Haplochromini", "Basal Modern Haplochromini", "Tropheini", "Serranochromini")
+
+#define tribes endemic to LT but that are not haplochromines
+lake_tanganyika <- c("Benthochromini", "Perissodini", "Cyprichromini",  "Ectodini", "Limnochromini",  "Cyphotilapiini", "Trematocarini", "Eretmodini",  "Lamprologini", "Bathybatini", "Boulengerochromini")
+
+#define tribes endemic to riverines but not haplochromines
+basal_riverine <- c("Chromidotilapiini", "Hemichromini", "Pelmatochromini", "Coptodonini", "Gobiocichlini", "Steatocranini",  "Etiini", "Tilapiini",  "Pelmatolapiini", "Oreochromini", "Tylochromini", "Heterochromini")
+
+#create mapping vector
+tribe_category <- case_when(
+  all_species_tribe %in% haplochromini ~ "haplochromini",
+  all_species_tribe %in% lake_tanganyika ~ "lake_tanganyika",
+  all_species_tribe %in% basal_riverine ~ "basal_riverine",
+  TRUE ~ "unknown" # Fallback in case a tribe is not categorized
+)
+
+#define new species tribe array with species_names associated with it
+all_species_tribe <- tribe_category
+names(all_species_tribe) <- all_species_stored_data_piscivore$species_name
+
+#convert matrix into dataframe
+all_species_matrix_data_df <- as.data.frame(all_species_matrix_data_piscivore)
+
+#isolate quantitative data
+all_species_tribe_matrix <- 
+  all_species_matrix_data_df %>%
+  filter(names(all_species_tribe) %in% all_species_matrix_data_df$X)
+```
+
+```{r Define Function to Fit Multiple Models (OUwie) to Water System Simmap}
+fit_multiple_regime_models <- function(tree, species_data, matrix_data, simmap_tree_index = 1, fit_common_models = TRUE) {
+  # Isolate water system data
+  species_tribe_null <- species_data
+  names(species_tribe_null) <- NULL
+  
+  # Create the OUwie dataframe
+  ouwie_df <- data.frame(
+    species_name = names(species_data),
+    variable = species_tribe_null,
+    tc = as.numeric(matrix_data[, 4])
+  )
+  
+  # Initialize a list to store model fits
+  fits <- list()
+  aic_values <- c()
+  
+  if (simmap_tree_index == random_tree_indices[[1]] && fit_common_models) {
+    # Fit common models only for the first tree
+    fits$BM1 <- OUwie(tree[[simmap_tree_index]], ouwie_df, model = 'BM1', simmap.tree = TRUE)
+    fits$OU1 <- OUwie(tree[[simmap_tree_index]], ouwie_df, model = 'OU1', simmap.tree = TRUE, root.station = FALSE)
+    
+    aic_values <- c(
+      BM1 = fits$BM1$AIC,
+      OU1 = fits$OU1$AIC
+    )
+  } else {
+    # Use the results from the first tree for subsequent trees
+    fits$BM1 <- NULL  # Placeholder for consistency
+    fits$OU1 <- NULL  # Placeholder for consistency
+    
+    # Reuse AIC values from the first tree
+    aic_values <- c(
+      BM1 = NA,  # Indicating that the value is reused
+      OU1 = NA   # Indicating that the value is reused
+    )
+  }
+  
+  # Fit models specific to each tree
+  fits$BMS <- OUwie(tree[[simmap_tree_index]], ouwie_df, model = 'BMS', simmap.tree = TRUE, root.station = FALSE)
+  fits$OUM <- OUwie(tree[[simmap_tree_index]], ouwie_df, model = 'OUM', simmap.tree = TRUE, root.station = FALSE)
+  fits$OUMV <- OUwie(tree[[simmap_tree_index]], ouwie_df, model = 'OUMV', simmap.tree = TRUE, root.station = FALSE)
+  fits$OUMA <- OUwie(tree[[simmap_tree_index]], ouwie_df, model = 'OUMA', simmap.tree = TRUE, root.station = FALSE)
+  fits$OUMVA <- OUwie(tree[[simmap_tree_index]], ouwie_df, model = 'OUMVA', simmap.tree = TRUE, root.station = FALSE)
+  
+  # Append the AIC values of the tree-specific models
+  aic_values <- c(
+    aic_values,
+    BMS = fits$BMS$AIC,
+    OUM = fits$OUM$AIC,
+    OUMV = fits$OUMV$AIC,
+    OUMA = fits$OUMA$AIC,
+    OUMVA = fits$OUMVA$AIC
+  )
+  
+  # Create a list to store all model fits and AIC values
+  result <- list(
+    aic_values = aic_values,
+    fits = fits
+  )
+  
+  return(result)
+}
+
+```
+
+```{r Fit Multiple OU Models to Data using OUwie for Water System}
+# Fit the models for 100 randomly chosen trees
+set.seed(1931) # Setting a seed for reproducibility
+random_tree_indices <- sample(length(all_species_tribe_simmap), 100)
+
+ #for (i in random_tree_indices) {
+   #all_species_tribe_simmap[[i]]$edge.length <- all_species_tree_tribe_pruned_edges
+ #}
+ 
+#ouwie_all_results_tribe <- list()
+# 
+#for (i in random_tree_indices) {
+  #cat("Fitting models for tree index:", i, "\n")
+   #results <- fit_multiple_regime_models(
+     #tree = all_species_tribe_simmap,
+     #species_data = all_species_tribe,
+     #matrix_data = all_species_tribe_matrix,
+     #simmap_tree_index = i,
+     #fit_common_models = TRUE #fits BM1 and OU1 models to first tree only (since it will be the same regardless of tree)
+   #)
+    #ouwie_all_results_tribe[[i]] <- results
+ #}
+
+#save the results output to prevent having to redo analysis:
+#saveRDS(ouwie_all_results_tribe, "Data/ouwie_all_results_tribe.rds")
+```
+
+```{r Filtering and Assembling OUwie Water System Results}
+
+#import the RDS object with the OU results:
+ouwie_all_results_tribe <- readRDS("Data/ouwie_all_results_tribe.rds")
+
+#filter results output to only contain the trees for which models were fitted:
+set.seed(1931)
+random_tree_indices <- sample(1:10000, 100)
+ouwie_all_results_tribe_filtered <- ouwie_all_results_tribe[random_tree_indices]
+
+#save filtered data
+saveRDS(ouwie_all_results_tribe_filtered, 'Data/ouwie_all_results_tribe_filtered.rds')
+
+# Initialize an empty list to store AIC values
+ouwie_all_results_tribe_filtered_aic <- list()
+
+# Loop through each model result and extract the AIC values
+for (i in seq_along(ouwie_all_results_tribe_filtered)) {
+  ouwie_all_results_tribe_filtered_aic[[i]] <- ouwie_all_results_tribe_filtered[[i]]$aic_values
+}
+
+# Combine the list into a matrix 
+ouwie_all_results_tribe_filtered_aic_df <- do.call(rbind, ouwie_all_results_tribe_filtered_aic)
+
+#convert matrix to dataframe:
+ouwie_all_results_tribe_filtered_aic_df <- as.data.frame(ouwie_all_results_tribe_filtered_aic_df)
+
+#convert into long format for easier plotting:
+ouwie_all_results_tribe_filtered_aic_df_long <- ouwie_all_results_tribe_filtered_aic_df %>%
+  pivot_longer(cols = everything(), 
+               names_to = "model", 
+               values_to = "aic")
+```
+
+```{r Plotting AIC Values for Each Model Fit}
+
+#plot the aic values for each of the models (note that BM and OU1 will be the same for each model)
+a1 <- ggplot(ouwie_all_results_tribe_filtered_aic_df_long, aes(x=model, y=aic))+
+      geom_boxplot()+
+      theme_classic()
+a1
+
+ggsave("Figures/OUwie Results/ouwie_all_results_tribe_aic_full.jpeg", 
+       plot = a1, dpi=300, width = 12, height = 10, units = 'cm')
+
+#alter y axis to esmphasise better fitting models
+a1a <- ggplot(ouwie_all_results_tribe_filtered_aic_df_long, aes(x=model, y=aic))+
+      geom_boxplot(outlier.shape = NA)+
+      ylim(-1390, -1340)+
+      theme_classic()
+a1a
+
+
+ggsave("Figures/OUwie Results/ouwie_all_results_tribe_aic_short.jpeg", 
+       plot = a1a, dpi=300, width = 12, height = 10, units = 'cm')
+```
+
+```{r Extract Parameter Values from OUMVA Model}
+# Initialize an empty list to store the filtered sigma^2 and root node values
+ouwie_all_results_tribe_OUMVA_parameters <- list()
+
+# Loop through each model result and filter by AICc
+for (i in seq_along(ouwie_all_results_tribe_filtered)) {
+  #extract the AICc value for the OUMV model
+  aicc_value <- ouwie_all_results_tribe_filtered[[i]]$fits$OUMVA$AICc
+  
+  #check if AICc is greater than or equal to -2000 (i.e. saddlepoints, poor fitting etc.)
+  if (aicc_value >= -2000) {
+    #define the regime
+    regime <- c("basal_riverine", "haplochromini", "lake_tanganyika")
+    
+    #extract alpha value
+    alpha <- ouwie_all_results_tribe_filtered[[i]]$fits$OUMVA$solution[1,]
+    
+    #extract the sigma^2 value (second row of the solution matrix)
+    sigma_squared <- ouwie_all_results_tribe_filtered[[i]]$fits$OUMVA$solution[2,]
+    
+    #extract the theta value and its standard error (first row of the theta matrix)
+    theta <- ouwie_all_results_tribe_filtered[[i]]$fits$OUMVA$theta 
+    
+    #combine into a named dataframe and add to the result list
+    ouwie_all_results_tribe_OUMVA_parameters[[i]] <- data.frame(
+      regime = regime,
+      alpha = alpha,
+      sigma_squared = sigma_squared,
+      theta = theta[1:3],
+      theta_se = theta[,2],
+      half_life = log(2)/alpha
+    )
+  }
+}
+
+#remove any NULL elements from the result list (if some models were excluded)
+ouwie_all_results_tribe_OUMVA_parameters <- ouwie_all_results_tribe_OUMVA_parameters[!sapply(ouwie_all_results_tribe_OUMVA_parameters, is.null)]
+
+#combine the list into a single dataframe
+ouwie_all_results_tribe_OUMVA_parameters_df <- do.call(rbind, ouwie_all_results_tribe_OUMVA_parameters)
+
+#convert matrix to dataframe (if needed, but do.call(rbind, ...) already returns a dataframe)
+ouwie_all_results_tribe_OUMVA_parameters_df <- as.data.frame(ouwie_all_results_tribe_OUMVA_parameters_df)
+
+#calculate mu (directional trend coefficient)
+ouwie_all_results_tribe_OUMVA_parameters_df$mu <-
+  ouwie_all_results_tribe_OUMVA_parameters_df$theta * ouwie_all_results_tribe_OUMVA_parameters_df$alpha
+
+#output table to check 
+ouwie_all_results_tribe_OUMVA_parameters_df
+```
+
+```{r Summary of OUMVA Parameters}
+#calculate summary of parameter values
+summary_OUMVA_parameters <- 
+  ouwie_all_results_tribe_OUMVA_parameters_df %>%
+  group_by(regime) %>%
+  summarise(median_sigma_squared = median(sigma_squared),
+            min_sigma_squared = min(sigma_squared),
+            max_sigma_squared = max(sigma_squared),
+            median_half_life = median(half_life),
+            median_alpha = median(alpha),
+            min_alpha = min(alpha),
+            max_alpha = max(alpha),
+            min_half_life = min(half_life),
+            max_half_life = max(half_life),
+            median_theta = median(theta),
+            min_theta = min(theta),
+            max_theta = max(theta),
+            median_se = median(theta_se),
+            min_se = min(theta_se),
+            max_se = max(theta_se),
+            median_mu = median(mu),
+            min_mu = min(mu),
+            max_mu = max(mu))
+
+summary_OUMVA_parameters
+
+write.csv(summary_OUMVA_parameters, '~/Desktop/tribe_OUMVA_parameters.csv')
+```
+
+
+

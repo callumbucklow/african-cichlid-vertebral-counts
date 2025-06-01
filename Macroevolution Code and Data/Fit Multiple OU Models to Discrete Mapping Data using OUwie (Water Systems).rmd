@@ -1,0 +1,304 @@
+---
+title: "Fit Multiple OU Models to Discrete Mapping Data using OUwie (Water Systems)"
+author: "Callum Bucklow"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r Setup, include=FALSE}
+knitr::opts_chunk$set(message = FALSE) ##Remove messages for all chunks
+knitr::opts_chunk$set(warning = FALSE) ##Remove warnings for all chunks
+```
+
+```{r Libraries}
+# Load the necessary libraries
+library(tidyverse) #data wrangling
+library(tidyr) #data wrangling
+library(dplyr)
+library(ggplot2) #for plotting when I don't want to use Base R
+library(gridExtra) #for ggplot, to plot multiple plots together
+library(fitdistrplus) #for fitting distributions to data
+library(ape) #for phylogeny manipulation and all the rest
+library(phytools) #for various things, including phylogenetic PCA, PGLM etc.
+library(nlme) #for pgls
+library(geiger) #for fitting trait evolution models to phylogenies
+library(OUwie) #for fitting multiple regime OU models to trait evolution models
+library(caper) #for pgls and will report pseudo-r2 for these models
+```
+
+# Fitting Multiple OU Models to Water System Simmap
+
+```{r Import Water System Simmap}
+all_species_water_system_simmap <- readRDS('Data/all_species_water_system_simmap.rds')
+```
+
+```{r Prepare All Species Data with their Water System Occupancy}
+#remember we are using the tree that has been pruned to those for which we know whether they are piscivorous or not
+
+#import qualitative data
+all_species_stored_data_piscivore <-
+  read.csv('Data/all_species_stored_data_piscivore.csv')
+
+#import quant data
+all_species_matrix_data_piscivore <-  read.csv('Data/all_species_matrix_data_piscivore.csv')
+
+#import piscivore pruned tree:
+all_species_tree_piscivore_pruned <- read.tree('Data/all_species_tree_piscivore_pruned.txt')
+
+#save edge lengths
+all_species_tree_water_system_pruned_edges <- all_species_tree_piscivore_pruned$edge.length
+
+#create trait variable for fitting discrete models:
+all_species_water_system <- all_species_stored_data_piscivore$water_system
+names(all_species_water_system) <- all_species_stored_data_piscivore$species_name
+
+#convert matrix into dataframe
+all_species_matrix_data_df <- as.data.frame(all_species_matrix_data_piscivore)
+
+#isolate quantitative data
+all_species_water_system_matrix <- 
+  all_species_matrix_data_df %>%
+  filter(names(all_species_water_system) %in% all_species_matrix_data_df$X)
+```
+
+```{r Define Function to Fit Multiple Models (OUwie) to Water System Simmap}
+fit_multiple_regime_models <- function(tree, species_data, matrix_data, simmap_tree_index = 1, fit_common_models = TRUE) {
+  # Isolate water system data
+  species_water_system_null <- species_data
+  names(species_water_system_null) <- NULL
+  
+  # Create the OUwie dataframe
+  ouwie_df <- data.frame(
+    species_name = names(species_data),
+    variable = species_water_system_null,
+    tc = as.numeric(matrix_data[, 4])
+  )
+  
+  # Initialize a list to store model fits
+  fits <- list()
+  aic_values <- c()
+  
+  if (simmap_tree_index == random_tree_indices[[1]] && fit_common_models) {
+    # Fit common models only for the first tree
+    fits$BM1 <- OUwie(tree[[simmap_tree_index]], ouwie_df, model = 'BM1', simmap.tree = TRUE)
+    fits$OU1 <- OUwie(tree[[simmap_tree_index]], ouwie_df, model = 'OU1', simmap.tree = TRUE, root.station = FALSE)
+    
+    aic_values <- c(
+      BM1 = fits$BM1$AIC,
+      OU1 = fits$OU1$AIC
+    )
+  } else {
+    # Use the results from the first tree for subsequent trees
+    fits$BM1 <- NULL  # Placeholder for consistency
+    fits$OU1 <- NULL  # Placeholder for consistency
+    
+    # Reuse AIC values from the first tree
+    aic_values <- c(
+      BM1 = NA,  # Indicating that the value is reused
+      OU1 = NA   # Indicating that the value is reused
+    )
+  }
+  
+  # Fit models specific to each tree
+  fits$BMS <- OUwie(tree[[simmap_tree_index]], ouwie_df, model = 'BMS', simmap.tree = TRUE, root.station = FALSE)
+  fits$OUM <- OUwie(tree[[simmap_tree_index]], ouwie_df, model = 'OUM', simmap.tree = TRUE, root.station = FALSE)
+  fits$OUMV <- OUwie(tree[[simmap_tree_index]], ouwie_df, model = 'OUMV', simmap.tree = TRUE, root.station = FALSE)
+  fits$OUMA <- OUwie(tree[[simmap_tree_index]], ouwie_df, model = 'OUMA', simmap.tree = TRUE, root.station = FALSE)
+  fits$OUMVA <- OUwie(tree[[simmap_tree_index]], ouwie_df, model = 'OUMVA', simmap.tree = TRUE, root.station = FALSE)
+  
+  # Append the AIC values of the tree-specific models
+  aic_values <- c(
+    aic_values,
+    BMS = fits$BMS$AIC,
+    OUM = fits$OUM$AIC,
+    OUMV = fits$OUMV$AIC,
+    OUMA = fits$OUMA$AIC,
+    OUMVA = fits$OUMVA$AIC
+  )
+  
+  # Create a list to store all model fits and AIC values
+  result <- list(
+    aic_values = aic_values,
+    fits = fits
+  )
+  
+  return(result)
+}
+
+```
+
+```{r Fit Multiple OU Models to Data using OUwie for Water System}
+# Fit the models for 100 randomly chosen trees
+set.seed(1931) # Setting a seed for reproducibility
+random_tree_indices <- sample(length(all_species_water_system_simmap), 100)
+# 
+# for (i in random_tree_indices) {
+#   all_species_water_system_simmap[[i]]$edge.length <- all_species_tree_water_system_pruned_edges
+# }
+# 
+# ouwie_all_results_water_system <- list()
+# 
+# for (i in random_tree_indices) {
+#   cat("Fitting models for tree index:", i, "\n")
+#   results <- fit_multiple_regime_models(
+#     tree = all_species_water_system_simmap,
+#     species_data = all_species_water_system,
+#     matrix_data = all_species_water_system_matrix,
+#     simmap_tree_index = i,
+#     fit_common_models = TRUE #fits BM1 and OU1 models to first tree only (since it will be the same regardless of tree)
+#   )
+#   # ouwie_all_results_water_system[[i]] <- results
+# }
+
+#save the results output to prevent having to redo analysis:
+# saveRDS(ouwie_all_results_water_system, "Data/ouwie_all_results_water_system.rds")
+```
+
+```{r Filtering and Assembling OUwie Water System Results}
+
+#import the RDS object with the OU results:
+ouwie_all_results_water_system <- readRDS("Data/ouwie_all_results_water_system.rds")
+
+#filter results output to only contain the trees for which models were fitted:
+ouwie_all_results_water_system_filtered <- ouwie_all_results_water_system[random_tree_indices]
+
+#save filtered data
+saveRDS(ouwie_all_results_water_system_filtered, 'Data/ouwie_all_results_water_system_filtered.rds')
+
+# Initialize an empty list to store AIC values
+ouwie_all_results_water_system_filtered_aic <- list()
+
+# Loop through each model result and extract the AIC values
+for (i in seq_along(ouwie_all_results_water_system_filtered)) {
+  ouwie_all_results_water_system_filtered_aic[[i]] <- ouwie_all_results_water_system_filtered[[i]]$aic_values
+}
+
+# Combine the list into a matrix 
+ouwie_all_results_water_system_filtered_aic_df <- do.call(rbind, ouwie_all_results_water_system_filtered_aic)
+
+#convert matrix to dataframe:
+ouwie_all_results_water_system_filtered_aic_df <- as.data.frame(ouwie_all_results_water_system_filtered_aic_df)
+
+#convert into long format for easier plotting:
+ouwie_all_results_water_system_filtered_aic_df_long <- ouwie_all_results_water_system_filtered_aic_df %>%
+  pivot_longer(cols = everything(), 
+               names_to = "model", 
+               values_to = "aic")
+
+
+```
+
+```{r Plotting AIC Values for Each Model Fit}
+
+#plot the aic values for each of the models (note that BM and OU1 will be the same for each model)
+a1 <- ggplot(ouwie_all_results_water_system_filtered_aic_df_long, aes(x=model, y=aic))+
+      geom_boxplot()+
+      ylim(-1450, -400)+
+      theme_classic()
+a1
+
+ggsave("Figures/OUwie Results/ouwie_all_results_water_system_aic_full.jpeg", 
+       plot = a1, dpi=300, width = 12, height = 10, units = 'cm')
+
+#alter y axis to esmphasise better fitting models
+a1a <- ggplot(ouwie_all_results_water_system_filtered_aic_df_long, aes(x=model, y=aic))+
+      geom_boxplot(outlier.shape = NA)+
+      ylim(-1400, -1300)+
+      theme_classic()
+a1a
+
+
+ggsave("Figures/OUwie Results/ouwie_all_results_water_system_aic_short.jpeg", 
+       plot = a1a, dpi=300, width = 12, height = 10, units = 'cm')
+```
+
+```{r Extract Parameter Values from BMS Model}
+
+# Initialize an empty list to store the filtered sigma^2 and root node values
+ouwie_all_results_water_system_BMS_parameters <- list()
+
+# Loop through each model result and filter by AICc
+for (i in seq_along(ouwie_all_results_water_system_filtered)) {
+  # Extract the AICc value for the BMS model
+  aicc_value <- ouwie_all_results_water_system_filtered[[i]]$fits$BMS$AICc
+  
+  # Check if AICc is greater than or equal to -2000
+  if (aicc_value >= -2000) {
+    #define the regime
+    regime <- c("Lake Victoria", "Lake Malawi", "Lake Tanganyika", "Riverine")
+
+    #extract the sigma^2 value (second row of the solution matrix)
+    sigma_squared <- ouwie_all_results_water_system_filtered[[i]]$fits$BMS$solution[2,]
+    
+    #extract the root value and its standard error (first row of the theta matrix)
+    root_value <- ouwie_all_results_water_system_filtered[[i]]$fits$BMS$theta[1,]
+    
+    #combine into a named dataframe and add to the result list
+    ouwie_all_results_water_system_BMS_parameters[[i]] <- data.frame(
+      regime = regime,
+      sigma_squared = sigma_squared,
+      root_value = root_value[1],
+      root_se = root_value[2]
+    )
+  }
+}
+
+# Remove any NULL elements from the result list (if some models were excluded)
+ouwie_all_results_water_system_BMS_parameters <- ouwie_all_results_water_system_BMS_parameters[!sapply(ouwie_all_results_water_system_BMS_parameters, is.null)]
+
+# Combine the list into a single dataframe
+ouwie_all_results_water_system_BMS_parameters_df <- do.call(rbind, ouwie_all_results_water_system_BMS_parameters)
+
+# Convert matrix to dataframe (if needed, but do.call(rbind, ...) already returns a dataframe)
+ouwie_all_results_water_system_BMS_parameters_df <- as.data.frame(ouwie_all_results_water_system_BMS_parameters_df)
+```
+
+```{r Plot Sigma-Squared Values from BMS Model Fits}
+#Reorder to lake radiation age
+ouwie_all_results_water_system_BMS_parameters_df$regime <- 
+  factor(ouwie_all_results_water_system_BMS_parameters_df$regime,
+         levels = c("Lake Victoria", "Lake Malawi", "Lake Tanganyika", "Riverine"))
+
+#plot sigma-squared by water system
+a2 <- ggplot(ouwie_all_results_water_system_BMS_parameters_df, aes(x=regime, y=sigma_squared))+
+      geom_boxplot(outlier.shape = NA)+
+       ylab(expression("Trait Variance (" * sigma^2 * ")"))+
+      xlab("Water System")+
+      theme_classic()
+a2
+
+ggsave("Figures/OUwie Results/BMS_water_system_sigma_squared.jpeg", 
+       plot = a2, dpi=300, width = 12, height = 10, units = 'cm')
+```
+
+```{r Plot Root Node Values from BMS Model Fits}
+#plot sigma-squared by water system
+a3 <- ggplot(ouwie_all_results_water_system_BMS_parameters_df, aes(x=regime, y=root_value))+
+      geom_boxplot(outlier.shape = NA)+
+       ylab(expression("Root value (" * Z0 * ")"))+
+      xlab("Water System")+
+      theme_classic()
+a3
+
+ggsave("Figures/OUwie Results/BMS_water_system_sigma_squared.jpeg", 
+       plot = a2, dpi=300, width = 12, height = 10, units = 'cm')
+```
+
+```{r Summary of BMS Parameters}
+
+summary_bms_parameters <- 
+  ouwie_all_results_water_system_BMS_parameters_df %>%
+  group_by(regime) %>%
+  summarise(median_sigma_squared = median(sigma_squared),
+            max_sigma_squared = max(sigma_squared),
+            min_sigma_squared = min(sigma_squared),
+            median_root_value = median(root_value),
+            max_root_value = max(root_value),
+            min_root_value = min(root_value),
+            median_se = median(root_se),
+            max_se = max(root_se),
+            min_se = min(root_se))
+
+write.csv(summary_bms_parameters, '~/Desktop/water_system_bms_paramters.csv')
+
+```
