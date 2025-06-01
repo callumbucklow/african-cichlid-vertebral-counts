@@ -1,4 +1,7 @@
-The code and data associated with the phylogenetic comparative methods utilised in 'African Cichlid Lake Radiations Recapitulate Riverine Axial Morphologies Through Repeated Exploration of Morphospace' is deposited here. 
+
+**African Cichlid Lake Radiations Recapitulate Riverine Axial Morphologies Through Repeated Exploration of Morphospace**
+
+The code and data associated with the phylogenetic comparative methods utilised in 'African Cichlid Lake Radiations Recapitulate Riverine Axial Morphologies Through Repeated Exploration of Morphospace' is deposited here:
 
 -------- Phylogenetic Comparative Methods -------
 
@@ -13,6 +16,10 @@ Some of the analysis, such as calcualtion of group differences (e.g. phylogeneti
 The code for the ancestral trait reconstruction (i.e. the ancestral reconstruction of some of the univariate traits examined in the paper), we used _fitContinuousMCMC_ in the R package _Geiger_ (Harmon et al., 2014). Within the folder 'Ancestral Trait Reconstruction' you will find the code necessary to reconstruct the univariate traits that is parallelised and can be modified to estimate multiple traits at the same time (the number of cores matches the number of datasets input). 
 
 You will also find .txt files for all the node and parameter estimates for all traits and all runs. Data is arranged in folders according to the trait. For reproducibility, seed values are indicated. 
+
+**Somitic Change Drives Changes in Vertebral Regionalisation in African Cichlids Despite Strong Canalisation of Somite Number**
+
+
 
 
 
