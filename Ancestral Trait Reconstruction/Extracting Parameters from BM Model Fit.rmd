@@ -1,0 +1,439 @@
+---
+title: "Extracting Parameters from BM Model Fits"
+author: "Callum Bucklow"
+date: '`r Sys.Date()`'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Libraries
+
+```{r Load Libraries}
+
+#load dependent libraries:
+require(ape)
+require(phytools)
+require(dplyr)
+require(tidyr)
+require(geiger)
+require(ggplot2)
+require(coda)
+require(stringr)
+require(viridis)
+```
+
+```{r Import ln[Total Count] Model Parameters}
+
+#define seed values used in the model fitting (part of filename)
+seed_values <- c(1931, 1971, 1970, 1996, 2016)
+
+#access the file paths
+file_paths <- paste0("ln[TC]/ln_tc_", 1:5, "_mcmc_2e+6_BM_output_", seed_values, "_model_params.txt")
+
+#start empty list
+ln_tc_params_list <- list()
+
+#loop through files as defined by the filepaths
+for (i in seq_along(file_paths)) {
+  
+  data <- read.table(file_paths[i], header = TRUE)
+  
+  #remoe burnin
+  rows_to_remove <- floor(0.1 * nrow(data))
+  
+  #remove rows which correspond to burnin
+  data_filtered <- data[(rows_to_remove + 1):nrow(data), ]
+  
+  ln_tc_params_list[[i]] <- data_filtered
+}
+
+#bind filtered model parameters together
+ln_tc_params_combined <- do.call(rbind, ln_tc_params_list)
+```
+
+```{r Plot Histograms of Parameter Values for ln[TC]}
+
+#distributuion of root values
+ggplot(ln_tc_params_combined, aes(x=root))+
+  geom_histogram(bins = 20)+
+  geom_vline(xintercept=mean(ln_tc_params_combined$root))+
+  theme_classic()
+
+#distributuion of sigmasq values
+ggplot(ln_tc_params_combined, aes(x=sigmasq))+
+  geom_histogram(bins = 20)+
+  geom_vline(xintercept=mean(ln_tc_params_combined$sigmasq))+
+  theme_classic()
+```
+
+```{r Summarise ln[TC] Results}
+  ln_tc_params_summary <- 
+  ln_tc_params_combined %>%
+  summarise(mean_tc = mean(root),
+            sd_tc = sd(root),
+            lower_ci = mean(root) - 1.96 * sd(root) / sqrt(n()), #can use 1.96 as normally distributed and n is very large
+            upper_ci = mean(root) + 1.96 * sd(root) / sqrt(n()),
+            mean_ss = mean(sigmasq),
+            sd_ss = sd(sigmasq),
+            lower_ci_ss = mean(sigmasq) - 1.96 * sd(sigmasq) / sqrt(n()),
+            upper_ci_ss = mean(sigmasq) + 1.96 * sd(sigmasq) / sqrt(n()))
+
+ln_tc_params_summary #3.342846 [3.339193:3.346499]
+
+# 95% CI 28.29955 [28.19636, 28.40312]
+
+
+```
+
+```{r Import ln[Total Count] Node States}
+
+#define seed values used in the model fitting (part of filename)
+seed_values <- c(1931, 1971, 1970, 1996, 2016)
+
+#access the file paths
+file_paths <- paste0("ln[TC]/ln_tc_", 1:5, "_mcmc_2e+6_BM_output_", seed_values, "_nodestates.txt")
+
+#start empty list
+ln_tc_params_list <- list()
+
+#loop through files as defined by the filepaths
+for (i in seq_along(file_paths)) {
+  
+  data <- read.table(file_paths[i], header = TRUE)
+  
+  #remoe burnin
+  rows_to_remove <- floor(0.1 * nrow(data))
+  
+  #remove rows which correspond to burnin
+  data_filtered <- data[(rows_to_remove + 1):nrow(data), ]
+  
+  ln_tc_params_list[[i]] <- data_filtered
+}
+
+#bind filtered model parameters together
+ln_tc_nodestates_combined <- do.call(rbind, ln_tc_params_list)
+
+ln_tc_nodestates_combined
+```
+
+```{r Importing Node State Estimates for ln[Total Count]}
+
+#define seed values used in the model fitting (part of filename)
+seed_values <- c(1931, 1971, 1970, 1996, 2016)
+
+files_tc <- paste0("ln[TC]/ln_tc_", 1:5, "_mcmc_2e+6_BM_output_", seed_values, "_nodestates.txt")
+
+# Read all files into a list
+ln.tc.node.states <- lapply(files_tc, read.table, header = TRUE)
+
+# If you want to assign each dataframe to its own variable, you can do so like this:
+names(ln.tc.node.states) <- paste0("ln.tc.node.states.", 1:5, ".param")
+list2env(ln.tc.node.states, envir = .GlobalEnv)
+
+#filter first 10% of estimated node states which corresponds to burnin 
+ln.tc.node.states.burnin.filtered <- lapply(ln.tc.node.states, function(df) {
+  df %>% filter(row_number() > 0.1 * n())
+})
+
+#combine into single list by column (which represents each node)
+ln.tc.node.states.combined.cols <- bind_rows(ln.tc.node.states.burnin.filtered)
+```
+
+```{r Calculate Mean and 95 CI for each node}
+# Convert to long format
+ln.tc.node.states.combined.long <- ln.tc.node.states.combined.cols %>%
+  pivot_longer(
+    cols = everything(),
+    names_to = "node",
+    values_to = "estimate"
+  )
+
+#calculate mean, sd and CI for each node
+ln.tc.node.states.combined.long.summary <- 
+  ln.tc.node.states.combined.long%>%
+  group_by(node) %>%
+  summarise(
+    mean = mean(estimate, na.rm = TRUE),
+    median = median(estimate, na.rm = TRUE),
+    sd = sd(estimate, na.rm = TRUE),
+    n = n(),
+    CI_upper = mean + 1.96 * (sd / sqrt(n)),
+    CI_lower = mean - 1.96 * (sd / sqrt(n))
+    )
+
+ln.tc.node.states.combined.long.summary$node <- gsub("^X", "", ln.tc.node.states.combined.long.summary$node)
+
+#write to csv file and save
+write.csv(ln.tc.node.states.combined.long.summary, "total_count_node_estimates_mcmc.csv")
+```
+
+```{r ContMap of ln[Total Count] BM by MCMC}
+#prepare the ancestral node data:
+ancestral_nodes <- as.matrix(ln.tc.node.states.combined.long.summary$mean)
+rownames(ancestral_nodes) <- as.numeric(ln.tc.node.states.combined.long.summary$node)
+
+#import tree:
+all_species_tree <- read.tree("all_species_tree_piscivore_pruned.txt")
+
+#substitue _ for space in tip labels:
+all_species_tree$tip.label <- gsub("_", " ", all_species_tree$tip.label)
+
+#import total_count data
+all_species_total_count <- read.csv("all_species_matrix_data_piscivore.csv")
+
+#create matrix:
+species_matrix <- as.matrix(all_species_total_count$total_count)
+rownames(species_matrix) <- all_species_total_count$X
+
+#check tree names match matrix:
+geiger::name.check(all_species_tree, species_matrix)
+
+#calculate contMap for ln[total_count], note we are inputting own estimated values:
+contmap_tc <- contMap(all_species_tree, species_matrix[,1], method='user', anc.states = ancestral_nodes, plot=FALSE)
+
+#set the colour map
+set.seed(1931)
+contmap_tc <- 
+  setMap(contmap_tc, c(plasma(4)))
+
+svg("contmap_tc_all_species_MCMC.svg", width=8.4, height=11)
+
+#plot the contmap:
+plot(contmap_tc,
+     legend=FALSE,
+     type = 'fan',
+     lwd=1.50,
+     fsize = 0.33,
+     ftype='b',
+     offset = 3.50)
+add.color.bar(10, contmap_tc$cols,title="ln[TC]", 
+    lims=contmap_tc$lims,digits=2,prompt=FALSE,x=-0.25,
+    y=5,lwd=5,fsize=0.50,subtitle="10 myrs")
+
+#nodelabels(cex=0.25,  frame = "none")
+
+dev.off()
+```
+
+
+
+```{r Compute Node Ages from Tree}
+#compute node ages from the root
+node_ages <- node.depth.edgelength(all_species_tree)
+
+#define two nodes to compare 
+node1 <- 1  #any extant tip
+node2 <- 540  #divergence of Diplotaxodon and Rhamphochromis
+node3 <- 764  #divergence of Bathybatini and Boulgerochormini
+node4 <- 491 #divergence of champsochromis caereleus and c. spilo
+
+#relative age difference (Rhampho)
+relative_age_diff <- abs(node_ages[node1] - node_ages[node2])
+relative_age_diff
+
+#relative age difference (Bathy)
+relative_age_diff_2 <- abs(node_ages[node1] - node_ages[node3])
+relative_age_diff_2
+
+#relative age difference (Champ)
+relative_age_diff_3 <- abs(node_ages[node1] - node_ages[node4])
+relative_age_diff_3 #0.3009747
+
+test <- all_species_total_count %>%
+  filter(str_detect(X, "Rhamphochromis|Diplotaxodon|Pallidochromis")) %>%
+  mutate(species_group = case_when(
+    str_detect(X, "Rhamphochromis") ~ "Rhamphochromis",
+    str_detect(X, "Diplotaxodon|Pallidochromis") ~ "Diplotaxodon"
+  )) %>%
+  group_by(species_group) %>%
+  summarise(mean_TC = mean(total_count, na.rm = TRUE))
+
+help <- test <- all_species_total_count %>%
+  filter(str_detect(X, "Lepidiolamprologus")) %>%
+  summarise(mean_TC = mean(total_count, na.rm=TRUE))
+help
+```
+
+```{r Import ln[PC] - ln[C] Model Parameters}
+
+#define seed values used in the model fitting (part of filename)
+seed_values <- c(1931, 1971, 1970, 1996, 2016)
+
+#access the file paths
+file_paths <- paste0("ln[PC]-ln[C]/ln_pc_ln_c_", 1:5, "_mcmc_2e+6_BM_output_", seed_values, "_model_params.txt")
+
+#start empty list
+ln_pc_ln_c_params_list <- list()
+
+#loop through files as defined by the filepaths
+for (i in seq_along(file_paths)) {
+  
+  data <- read.table(file_paths[i], header = TRUE)
+  
+  #remoe burnin
+  rows_to_remove <- floor(0.1 * nrow(data))
+  
+  #remove rows which correspond to burnin
+  data_filtered <- data[(rows_to_remove + 1):nrow(data), ]
+  
+  ln_pc_ln_c_params_list[[i]] <- data_filtered
+}
+
+#bind filtered model parameters together
+ln_pc_ln_c_params_combined <- do.call(rbind, ln_pc_ln_c_params_list)
+
+#calculate effective sample size
+ln_pc_ln_c_combined_mcmc <- mcmc(ln_pc_ln_c_params_combined)
+effectiveSize(ln_pc_ln_c_combined_mcmc) #ROOT 361.74996
+```
+
+```{r Summarise ln[PC] - ln[C] Results}
+ln_pc_ln_c_params_summary <-
+  ln_pc_ln_c_params_summary <- 
+  ln_pc_ln_c_params_combined %>%
+  summarise(mean_ln_pc_ln_c = mean(root),
+            sd_ln_pc_ln_c = sd(root),
+            lower_ci = mean(root) - 1.96 * sd(root) / sqrt(n()), #can use 1.96 as normally distributed and n is very large
+            upper_ci = mean(root) + 1.96 * sd(root) / sqrt(n()))
+
+ln_pc_ln_c_params_summary #-0.09061365 95% CI [-0.09560744, -0.08561986	]
+```
+
+```{r Import ln[Length] - ln[Width] Model Parameters}
+
+#define seed values used in the model fitting (part of filename)
+seed_values <- c(1931, 1971, 1970, 1996, 2016)
+
+#access the file paths
+file_paths <- paste0("ln[Length]-ln[Width]/ln_length_ln_width_", 1:5, "_mcmc_2e+6_BM_output_", seed_values, "_model_params.txt")
+
+#start empty list
+ln_length_ln_width_params_list <- list()
+
+#loop through files as defined by the filepaths
+for (i in seq_along(file_paths)) {
+  
+  data <- read.table(file_paths[i], header = TRUE)
+  
+  #remoe burnin
+  rows_to_remove <- floor(0.1 * nrow(data))
+  
+  #remove rows which correspond to burnin
+  data_filtered <- data[(rows_to_remove + 1):nrow(data), ]
+  
+  ln_length_ln_width_params_list[[i]] <- data_filtered
+}
+
+#bind filtered model parameters together
+ln_length_ln_width_params_combined <- do.call(rbind, ln_length_ln_width_params_list)
+
+#calculate effective sample size
+ln_length_ln_width_combined_mcmc <- mcmc(ln_length_ln_width_params_combined)
+effectiveSize(ln_length_ln_width_combined_mcmc) #ROOT 572.98616
+```
+
+```{r Summarise ln[Length] - ln[Width] Results}
+ln_length_ln_width_params_summary <-
+ ln_length_ln_width_params_summary <- 
+  ln_length_ln_width_params_combined %>%
+  summarise(mean_ln_length_ln_width = mean(root),
+            sd_ln_length_ln_width = sd(root),
+            lower_ci = mean(root) - 1.96 * sd(root) / sqrt(n()), #can use 1.96 as normally distributed and n is very large
+            upper_ci = mean(root) + 1.96 * sd(root) / sqrt(n()))
+
+ln_length_ln_width_params_summary #0.9857241 95% CI [0.9719494, 0.9994989]
+```
+
+```{r Import ln[Anterior Length] - ln[Width] Model Parameters}
+
+#define seed values used in the model fitting (part of filename)
+seed_values <- c(1931, 1971, 1970, 1996, 2016)
+
+#access the file paths
+file_paths <- paste0("ln[Anterior]-ln[Width]/ln_ant_length_ln_width_", 1:5, "_mcmc_2e+6_BM_output_", seed_values, "_model_params.txt")
+
+#start empty list
+ln_anterior_ln_width_params_list <- list()
+
+#loop through files as defined by the filepaths
+for (i in seq_along(file_paths)) {
+  
+  data <- read.table(file_paths[i], header = TRUE)
+  
+  #remoe burnin
+  rows_to_remove <- floor(0.1 * nrow(data))
+  
+  #remove rows which correspond to burnin
+  data_filtered <- data[(rows_to_remove + 1):nrow(data), ]
+  
+  ln_anterior_ln_width_params_list[[i]] <- data_filtered
+}
+
+#bind filtered model parameters together
+ln_anterior_ln_width_params_combined <- do.call(rbind, ln_anterior_ln_width_params_list)
+
+#calculate effective sample size
+ln_anterior_ln_width_combined_mcmc <- mcmc(ln_anterior_ln_width_params_combined)
+effectiveSize(ln_anterior_ln_width_combined_mcmc) #ROOT 566.90149
+```
+
+```{r Summarise ln[Anterior Length] - ln[Width] Results}
+ln_anterior_ln_width_params_summary <-
+ ln_anterior_ln_width_params_summary <- 
+  ln_anterior_ln_width_params_combined %>%
+  summarise(mean_ln_anterior_ln_width = mean(root),
+            sd_ln_anterior_ln_width = sd(root),
+            lower_ci = mean(root) - 1.96 * sd(root) / sqrt(n()), #can use 1.96 as normally distributed and n is very large
+            upper_ci = mean(root) + 1.96 * sd(root) / sqrt(n()))
+
+ln_anterior_ln_width_params_summary
+```
+
+```{r Import ln[Posterior Length] - ln[Width] Model Parameters}
+
+#define seed values used in the model fitting (part of filename)
+seed_values <- c(1931, 1971, 1970, 1996, 2016)
+
+#access the file paths
+file_paths <- paste0("ln[posterior]-ln[Width]/ln_post_length_ln_width_", 1:5, "_mcmc_2e+6_BM_output_", seed_values, "_model_params.txt")
+
+#start empty list
+ln_posterior_ln_width_params_list <- list()
+
+#loop through files as defined by the filepaths
+for (i in seq_along(file_paths)) {
+  
+  data <- read.table(file_paths[i], header = TRUE)
+  
+  #remoe burnin
+  rows_to_remove <- floor(0.1 * nrow(data))
+  
+  #remove rows which correspond to burnin
+  data_filtered <- data[(rows_to_remove + 1):nrow(data), ]
+  
+  ln_posterior_ln_width_params_list[[i]] <- data_filtered
+}
+
+#bind filtered model parameters together
+ln_posterior_ln_width_params_combined <- do.call(rbind, ln_posterior_ln_width_params_list)
+
+#calculate effective sample size
+ln_posterior_ln_width_combined_mcmc <- mcmc(ln_posterior_ln_width_params_combined)
+effectiveSize(ln_posterior_ln_width_combined_mcmc) #ROOT 583.10653
+```
+
+```{r Summarise ln[Posterior Length] - ln[Width] Results}
+ln_posterior_ln_width_params_summary <-
+ ln_posterior_ln_width_params_summary <- 
+  ln_posterior_ln_width_params_combined %>%
+  summarise(mean_ln_posterior_ln_width = mean(root),
+            sd_ln_posterior_ln_width = sd(root),
+            lower_ci = mean(root) - 1.96 * sd(root) / sqrt(n()), #can use 1.96 as normally distributed and n is very large
+            upper_ci = mean(root) + 1.96 * sd(root) / sqrt(n()))
+
+ln_posterior_ln_width_params_summary 
+```
+
