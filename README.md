@@ -19,6 +19,8 @@ The code for the ancestral trait reconstruction (i.e. the ancestral reconstructi
 
 You will also find .txt files for all the node and parameter estimates for all traits and all runs. Data is arranged in folders according to the trait. For reproducibility, seed values are indicated. 
 
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
 **Somitic Change Drives Changes in Vertebral Regionalisation in African Cichlids Despite Strong Canalisation of Somite Number**
 
 The code and data associated with the phylogenetic comparative methods utilised in 'Somitic Change Drives Changes in Vertebral Regionalisation in African Cichlids Despite Strong Canalisation of Somite Number' is deposited here:
