@@ -1,0 +1,972 @@
+---
+title: "Phylogenetic Meta-analysis and Body Aspect Scaling"
+author: "Callum Bucklow"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r Setup, include=FALSE}
+knitr::opts_chunk$set(message = FALSE) ##Remove messages for all chunks
+knitr::opts_chunk$set(warning = FALSE) ##Remove warnings for all chunks
+```
+
+```{r Libraries}
+# Load the necessary libraries
+library(tidyverse) #data wrangling
+library(tidyr) #data wrangling
+library(dplyr) #data wrangling
+library(ggplot2) #for plotting when I don't want to use Base R (i.e. most of the time)
+library(gridExtra) #for ggplot, to plot multiple plots together
+library(ape) #for phylogeny manipulation and all the rest
+library(phytools) #for various things, including phylogenetic PCA, PGLM etc.
+library(caper) #for pgls and will report pseudo-r2 for these models
+library(metafor) #for multiple
+library(viridis)
+library(ggtree) #hate using this but useful for plotting cladograms
+library(phyr) #for phylogenetic linear mixed model
+
+```
+
+```{r Import the Data}
+all_species <- readRDS('Data/all_species.rds') #for tree
+vertebral_counts <- read.csv('Data/vertebral_counts_master.csv')
+```
+
+```{r Data Wrangling}
+#group according to species (and other variables) and calculate the standard deviation of the RAW precaudal, caudal and total counts
+vertebral_counts_intraspecific_variation <- vertebral_counts %>% 
+  group_by(
+    species_name) %>%
+  summarise(
+    ln_length_ln_width_sd = sd(ln_length_ln_width, na.rm=TRUE),
+    ln_length_ln_width = mean(ln_length_ln_width, na.rm=TRUE),
+    precaudal_count_sd = sd(precaudal_count, na.rm = TRUE),
+    precaudal_count = mean(precaudal_count, na.rm = TRUE),
+    caudal_count_sd = sd(caudal_count, na.rm = TRUE),
+    caudal_count = mean(caudal_count, na.rm = TRUE),
+    total_count_median = median(total_count, na.rm = TRUE),
+    total_count_iqr = IQR(total_count, na.rm = TRUE),
+    total_count_sd = sd(total_count, na.rm = TRUE),
+    total_count = mean(total_count, na.rm = TRUE),
+    total_count_cv = total_count_sd / total_count, #coefficient of variation, may not be necessary mean range of vertebrae is narrow between species (25-40)
+    n_count = n()
+  )
+
+vertebral_counts_intraspecific_variation_filtered <- 
+  vertebral_counts_intraspecific_variation %>%
+  filter(n_count >= 5.00)
+```
+
+```{r Import Tree}
+#import the tree
+mcgee_2020 <- read.tree('Phylogenies/phylogenies_mcgee_2020/phylogeny_mcgee_2020.tre')
+
+#format tip labels to match the formatting of the species_names in data-frames
+mcgee_2020$tip.label <- gsub("_", " ", mcgee_2020$tip.label)
+
+#ladderise the tree
+mcgee_2020 <- ladderize(mcgee_2020)
+```
+
+```{r Fitting Individual Species BAR ~ TC Linear Models}
+
+#fit linear models for each species with at least 10 individuals, note that for some of them the vertebral counts are the same between individuals and will therefore be undefined.
+within_species_linear_models <- vertebral_counts %>%
+  group_by(species_name) %>%
+  filter(n() >= 10) %>%
+  group_split() %>%
+  map_df(~ {
+    mod <- tryCatch(
+      lm(ln_length_ln_width ~ log(total_count), data = .x),
+      error = function(e) NULL
+    )
+    
+    if (is.null(mod)) {
+      return(tibble(
+        species_name = unique(.x$species_name),
+        slope = NA_real_,
+        slope_se = NA_real_,
+        p_value = NA_real_,
+        r_squared = NA_real_,
+        n = nrow(.x)
+      ))
+    }
+    
+    coefs <- summary(mod)$coefficients
+    if (nrow(coefs) < 2) {
+      return(tibble(
+        species_name = unique(.x$species_name),
+        slope = NA_real_,
+        slope_se = NA_real_,     
+        p_value = NA_real_,
+        r_squared = NA_real_,
+        n = nrow(.x)
+      ))
+    }
+
+    tibble( 
+      species_name = unique(.x$species_name),
+      slope = coefs[2, 1],
+      slope_se = coefs[2, 2],   
+      p_value = coefs[2, 4],
+      r_squared = summary(mod)$r.squared,
+      n = nrow(.x)
+    )
+  })
+
+#remove NA values (i.e. species where no intraspecific variation is present)
+within_species_linear_models <- na.omit(within_species_linear_models)
+
+#prune the mcgee 2020 tree to data
+within_species_linear_models_pruned_tree <- drop.tip(mcgee_2020, 
+                                            which(!mcgee_2020$tip.label %in% within_species_linear_models$species_name))
+
+#subset data frame to include only species present in the pruned tree
+#subset according to the phylogeny
+within_species_linear_models_subsetted <- within_species_linear_models[
+ within_species_linear_models$species_name %in% within_species_linear_models_pruned_tree$tip.label, 
+]
+#convert to dataframe
+within_species_linear_models_subsetted <- as.data.frame(within_species_linear_models_subsetted)
+#set rownames as species_names for ease later
+rownames(within_species_linear_models_subsetted) <- within_species_linear_models_subsetted$species_name
+
+#reorder data frame based on the order of tip labels in the pruned tree
+within_species_linear_models_subsetted <- within_species_linear_models_subsetted[
+  match(within_species_linear_models_pruned_tree$tip.label, within_species_linear_models_subsetted$species_name), 
+]
+```
+
+```{r Do Small Sample Sizes Increase Slope Noise?}
+ggplot(within_species_linear_models_subsetted, aes(x=n, y=slope))+
+  geom_point()+
+  geom_smooth(method = "lm")+
+  theme_classic()
+```
+
+```{r Construct VCV Matrix for Downstream Analysis}
+#construct the vcv matrix:
+slopes_species <- caper::comparative.data(
+  phy = within_species_linear_models_pruned_tree,
+  data = within_species_linear_models_subsetted,
+  names.col = species_name,
+  vcv = TRUE,
+  vcv.dim = 3
+)
+```
+
+```{r Phylogenetic Meta-Analysis on Slopes}
+#convert species_name to factor with levels matching tree tip order
+within_species_linear_models_subsetted$species_name <- factor(within_species_linear_models_subsetted$species_name, levels = within_species_linear_models_pruned_tree$tip.label)
+
+#calculate phylogenetic correlation matrix
+phy_cor <- ape::vcv(within_species_linear_models_pruned_tree, corr = TRUE)
+phy_cor <- phy_cor[within_species_linear_models_subsetted$species_name, 
+                   within_species_linear_models_subsetted$species_name]
+
+#run phylogenetic meta-analysis weighted by slope SE, accounting for phylogeny
+res <- rma.mv(
+  yi = within_species_linear_models_subsetted$slope, #use slopes from each species’ linear model as effect sizes
+  V = within_species_linear_models_subsetted$slope_se^2, #weight each slope by the SAMPLING variance of the slope estimate (se^2)
+  random = ~ 1 | species_name, #account for species-level variation, allow each species to have its own deviation from overall mean slope
+ #this models species-specific effects as random deviations sampled from a shared distribution
+  R = list(species_name = phy_cor), #incorporate phylogenetic relationships by including the phylogenetic covariance matrix
+  method = "REML", #estimate parameters using restricted maximum likelihood (REML)
+  data = within_species_linear_models_subsetted
+)
+#summarise the model
+summary(res)
+```
+
+```{r Plot Slope Sampling Variances}
+
+#add significance column based on p-value
+within_species_linear_models_subsetted$significant <- ifelse(
+  within_species_linear_models_subsetted$p_value < 0.05, "Significant", "Not Significant"
+)
+
+#plot sampling variances and scale points according to weights used in model fit (i.e. 1/se^2)
+help <- ggplot(within_species_linear_models_subsetted, aes(x = log10(slope_se^2), y = slope, colour = significant, shape=significant))+
+  geom_point(aes(size = 1/slope_se^2), alpha=0.50)+ #weighted variance (1/sampling variance) - i.e. the weights used
+  xlab(expression(bold("Log"[10]*" of Slope SE"^2*" (Sampling Variance)")))+
+  ylab(expression(bold("Slope (" * beta[1] * ")")))+
+  geom_hline(yintercept = 0, linetype='dotdash', colour='blue', linewidth=1)+
+  scale_colour_manual(values = c("Significant" = "red", "Not Significant" = "black"))+
+  theme_classic()+
+  theme(legend.position='none',
+                 axis.text = element_text(size=11),
+                 axis.title = element_text(size=11, face='bold'))
+help
+
+ggsave("Figures/Analysis of Intraspecific Variation/slopes_versus_slope_sampling_variance.jpeg", help, dpi = 600, width = 10, height = 10, units = "cm")
+
+```
+
+```{r Plot Distribution of Slopes}
+
+#extract fixed effect (i.e. intercept of model) and standard error from REML model
+fixed_effect <- coef(res)[1] #note only fit intercept-only model so only one coefficient estimated
+se <- res$se #standard error for the slope
+
+#calculate 95% confidence interval manually
+lower_ci <- fixed_effect - 1.96 * se
+upper_ci <- fixed_effect + 1.96 * se
+
+#plot histogram with both REML and raw mean + CI lines
+help_2 <- ggplot(within_species_linear_models_subsetted, aes(x = slope))+
+  geom_histogram(aes(y = ..density..), bins = 20, fill = "lightgray", color = "black", alpha = 0.7)+
+  ylab("Density")+
+  xlab(expression(bold("Slope (" * beta[1] * ")")))+
+  #REML mean and CI lines (red)
+  geom_vline(xintercept = fixed_effect, colour = "red", linetype = "solid", size = 1)+
+  geom_vline(xintercept = lower_ci, colour = "red", linetype = "dashed", size = 0.8)+
+  geom_vline(xintercept = upper_ci, colour = "red", linetype = "dashed", size = 0.8)+
+  theme_classic()+
+  theme(legend.position='none',
+                 axis.text = element_text(size=11),
+                 axis.title = element_text(size=11, face='bold'))
+help_2
+
+ggsave("Figures/Analysis of Intraspecific Variation/slopes_distribution_metaanalysis_ci.jpeg", help_2, dpi = 600, width = 10, height = 10, units = "cm")
+
+```
+# Windowing Tree for All Species (n=429)
+
+```{r}
+
+#filter count data to species >10 individuals (i.e. from meta-analysis)
+filtered_quant_data <- 
+  vertebral_counts %>%
+  group_by(species_name) %>%
+  filter(species_name %in% all_species$stored_data$species_name) %>%
+    summarise(
+    total_count = mean(log(total_count), na.rm = TRUE), 
+    ln_length_ln_width = mean(ln_length_ln_width, na.rm=TRUE)
+  )
+
+#reorder filtered_quant_data to match the tree tip order
+filtered_quant_data <- filtered_quant_data[match(all_species$tree$tip.label,
+                                                 filtered_quant_data$species_name), ]
+
+#define vectors for downstream analysis
+filtered_total_count <- setNames(filtered_quant_data$total_count, filtered_quant_data$species_name)
+filtered_body_elongation <- setNames(filtered_quant_data$ln_length_ln_width, filtered_quant_data$species_name)
+
+```
+
+```{r Calculate PICs}
+
+#calculate PICs
+filtered_total_count_pics <- ape::pic(filtered_total_count, all_species$tree)
+filtered_body_elongation_pics <- ape::pic(filtered_body_elongation, all_species$tree)
+
+#node depths from tips (default)
+node_depths <- node.depth.edgelength(all_species$tree)
+
+#total tree height (distance from root to tips)
+tree_height <- max(node_depths)
+
+#node age from root
+node_ages_from_root <- tree_height - node_depths
+
+# Internal nodes only
+n_tips <- length(all_species$tree$tip.label)
+internal_node_ages <- node_ages_from_root[(n_tips + 1):length(node_ages_from_root)]
+
+#define window width and split nodes into bins 
+age_bins <- quantile(internal_node_ages, probs = seq(0, 1, by = 0.10))  #10 bins
+node_bin <- cut(internal_node_ages, breaks = age_bins, include.lowest = TRUE)
+table(node_bin)
+
+#assemble into pic dataframe
+pic_df <- data.frame(
+  age = internal_node_ages,
+  age_bin = node_bin,
+  tc_pic = filtered_total_count_pics,
+  body_elongation_pic = filtered_body_elongation_pics
+)
+
+windowed_corr <- pic_df %>%
+  group_by(age_bin) %>%
+  summarise(
+    cor_val = cor(tc_pic, body_elongation_pic, use = "complete.obs"),
+    n_nodes = n()
+  )
+
+windowed_r2 <- pic_df %>%
+  group_by(age_bin) %>%
+  summarise(
+    n_nodes = n(),
+    r2_val = if(n() > 1) summary(lm(body_elongation_pic ~ tc_pic))$r.squared else NA_real_,
+    slope = if(n() > 1) coef(lm(body_elongation_pic ~ tc_pic))[2] else NA_real_,
+    slope_se = if(n() > 1) summary(lm(body_elongation_pic ~ tc_pic))$coefficients[2,2] else NA_real_
+  )
+
+#convert factor bins to numeric midpoints
+windowed_r2$age_mid <- sapply(strsplit(as.character(windowed_r2$age_bin), ","), function(x) {
+  nums <- as.numeric(gsub("\\(|\\[|\\]|\\)", "", x))  #remove brackets/parentheses
+  mean(nums)  #midpoint
+})
+```
+
+```{r Plot R2 by Node Age Bin}
+
+v1 <- ggplot(windowed_r2, aes(x = age_mid, y = r2_val)) +
+  geom_point(colour = "black", size = 3) +
+  geom_line(group = 1, color = "black") +
+  #scale_x_reverse() +  # oldest nodes on left
+  #xlab("Node age (Myr, oldest → youngest)") +
+  #ylab(expression(R^2 ~ "of elongation ~ vertebral count")) +
+  geom_smooth(method = "lm", formula = y ~ x, se = FALSE, colour = "red")+
+  geom_smooth(method = "lm", formula = y ~ poly(x, 2), se = FALSE, color = "blue")+
+  xlab("Node age")+
+  ylab("R-squared (variation explained)")+
+  theme_classic()
+v1
+```
+
+```{r Plot Slope by Node Age Bin}
+
+v2 <- ggplot(windowed_r2, aes(x = age_mid, y = slope)) +
+  geom_point(colour = "black", size = 3) +
+  geom_errorbar(aes(ymin = slope - slope_se, ymax = slope + slope_se), width = 0.3) +  # tails
+  geom_line(group = 1, color = "black") +
+  geom_smooth(method = "lm", formula = y ~ x, se = FALSE, colour = "red")+
+  geom_smooth(method = "lm", formula = y ~ poly(x, 2), se = FALSE, color = "blue")+
+  xlab("Node age")+
+  ylab(expression("Slope (" * beta[1] * ")"))+
+  theme_classic()
+v2
+```
+
+```{r Sliding Window Binning}
+
+window_size <- 30   #number of nodes per window
+step_size <- 2      #how much to slide the window each iteration
+
+#sort by node age
+pic_df <- pic_df %>%
+  filter(!is.na(age)) %>%  # remove rows with missing node age
+  mutate(age = as.numeric(age)) %>%
+  arrange(age)
+
+#initialize empty storage for loop
+results <- data.frame(
+  window_mid = numeric(0),
+  slope = numeric(0),
+  slope_se = numeric(0),
+  r2_val = numeric(0),
+  r2_lower = numeric(0),
+  r2_upper = numeric(0),
+  n_nodes = integer(0)
+)
+
+#sliding window loop
+for (start in seq(1, nrow(pic_df) - window_size + 1, by = step_size)) {
+  window_data <- pic_df[start:(start + window_size - 1), ]
+  
+  #fit linear model
+  model <- lm(body_elongation_pic ~ tc_pic, data = window_data)
+  model_summary <- summary(model)
+  
+  slope_val <- coef(model)[2]
+  slope_se <- model_summary$coefficients[2,2]
+  r2_val <- model_summary$r.squared
+  
+  #bootstrap R²
+  set.seed(1931)
+  boot_r2 <- replicate(1000, {
+    sample_data <- window_data[sample(nrow(window_data), replace = TRUE), ]
+    summary(lm(body_elongation_pic ~ tc_pic, data = sample_data))$r.squared
+  })
+  ci <- quantile(boot_r2, probs = c(0.025, 0.975))
+  
+  # store results
+  results <- rbind(results, data.frame(
+    window_mid = mean(window_data$age),
+    slope = slope_val,
+    slope_se = slope_se,
+    r2_val = r2_val,
+    r2_lower = ci[1],
+    r2_upper = ci[2],
+    n_nodes = nrow(window_data)
+  ))
+}
+
+#compare extant slope from PGLS model (1.51067) to slopes for each window and calculate 2-tailed p-value
+results$p_value <- 2 * (1 - pnorm(abs((results$slope - 1.51067)/results$slope_se)))
+
+#how many windows is the slope significantly different from 1.511?
+table(results$p_value < 0.05) #FALSE  TRUE 326    83 - most windows the slope is not sig. diff. from global estimate from extant species, unlikely to have changed across subfamily diversification (I think)
+
+#what are the global trends?
+
+#fit x^2 linear model for slope and window
+lm_slope_poly <- lm(slope ~ poly(window_mid,2), data = results)
+summary(lm_slope_poly) #poly fits better, although this is probably not meaningful. 
+
+#fit x^2 linear model for r^2 and window
+lm_r2_poly <- lm(r2_val ~ poly(window_mid,2), data = results)
+summary(lm_r2_poly) #poly fits better
+```
+
+```{r Plotting of Windowed Slope}
+
+#dummy dataframe for plotting of extant pgls slope and CI
+extant_ribbon <- data.frame(
+  window_mid = seq(0, max(results$window_mid), length.out = 100),
+  slope = 1.51067,  # central value
+  ymin = 1.51067 - 1.96*0.12599,  # lower bound
+  ymax = 1.51067 + 1.96*0.12599   # upper bound
+)
+
+max(results$window_mid)
+
+#slope plotting
+x3 <- ggplot(results, aes(x = window_mid, y = slope))+
+  geom_line(colour = "black")+
+  geom_ribbon(aes(ymin = slope - 1.96*slope_se, ymax = slope + 1.96*slope_se),
+            alpha = 0.2, fill = "black")+
+  geom_point(aes(y = slope), size = 1.50, colour = "black", alpha=0.75)+
+  #geom_smooth(method = "lm", formula = y ~ x, se = FALSE, colour = "red")+
+  geom_smooth(method = "lm", formula = y ~ x, se = TRUE, colour = "blue", fill='blue', linewidth=1)+
+  #geom_smooth(method = "lm", formula = y ~ poly(x, 2), se = FALSE, color = "blue")+
+  geom_segment(aes(x = 0, xend = 30.35112, y = 1.511, yend = 1.511),
+             linetype = "dashed", colour = "darkred", linewidth = 1)+ #extant PGLS slope
+  geom_ribbon(data = extant_ribbon, aes(x = window_mid, ymin = ymin, ymax = ymax),
+            fill = "red", alpha = 0.2)+ #adding CI from error of extant pgls slope (0.12599)
+  #scale_x_reverse()+
+  xlab("Median Node Age (Myr)")+
+  ylab(expression(bold("Slope ("*beta[1]*")")))+
+  theme_classic()+
+  theme(legend.position='none',
+                 axis.text = element_text(size=12),
+                 axis.title = element_text(size=12, face='bold'))
+x3
+
+#ggsave("Figures/Analysis of Intraspecific Variation/windowed_pic_slope_all_species.jpg", x3, dpi=600, width = 10, height = 10, units = "cm")
+
+
+results
+```
+
+```{r Plotting of Windows R2}
+
+#r2 plotting
+x4 <- ggplot(results, aes(x = window_mid, y = r2_val)) +
+  geom_line(colour = "black") +
+  geom_point(aes(y = r2_val), size = 1.5, colour = "black", alpha = 0.75) +
+  geom_smooth(method = "lm", formula = y ~ x, se = TRUE, colour = "blue", fill='blue')+
+  geom_smooth(method = "lm", formula = y ~ poly(x,2), se = TRUE, colour = "blue")+
+  geom_ribbon(aes(ymin = r2_lower, ymax = r2_upper), fill = "black", alpha = 0.2) +  #bootstrap CI ribbon
+  geom_segment(aes(x = 0, xend = 30.35112, y = 0.250, yend = 0.250),
+               linetype = "dashed", colour = "darkred", linewidth = 1)+
+  xlab("Median Node Age (Myr)") +
+  ylab(expression(bold(R^2~"(variation explained)"))) +
+  theme_classic() +
+  theme(legend.position='none',
+        axis.text = element_text(size=12),
+        axis.title = element_text(size=12, face='bold'))
+x4
+
+#ggsave("Figures/Analysis of Intraspecific Variation/windowed_pic_r2_all_species.jpg", x4, dpi=600, width = 10, height = 10, units = "cm")
+```
+
+```{r Phylogenetic linear mixed model (slope and residual variance heterogeneity)}
+
+#data is stored here
+#all_species$matrix_data
+
+x <- all_species$matrix_data[,3]
+y <- all_species$matrix_data[,5]
+species_names <- rownames(all_species$matrix_data)
+
+#combine into dataframe (pglmm expects a dataframe)
+total_count_body_aspect_ratio <- data.frame(
+  species = species_names,
+  x = x,
+  y = y
+)
+#remove rownames
+rownames(total_count_body_aspect_ratio) <- NULL
+#factorise the species name (for some reason)
+total_count_body_aspect_ratio$species <- as.factor(total_count_body_aspect_ratio$species)
+
+total_count_body_aspect_ratio
+#phylogenetic covariance matrix
+A <- ape::vcv.phylo(all_species$tree)
+
+A
+
+total_count_body_aspect_ratio$species == rownames(A)
+
+#fit random-slope PGLMM
+plmm_tc_bar <- pglmm(
+  formula = y ~ x + (x | species__),  # random intercept + slope with phylogenetic covariance
+  data = total_count_body_aspect_ratio,
+  family = "gaussian",
+  cov_ranef = list(species = A)
+)
+
+summary(plmm_tc_bar)
+
+#residuals from the PGLMM
+resid_vals <- residuals(plmm_tc_bar)
+
+
+#combine with species names
+resid_df <- data.frame(
+  species = total_count_body_aspect_ratio$species,
+  residual = resid_vals
+)
+
+#absolute residuals
+resid_df$abs_residual <- abs(resid_df$residual)
+
+#10 species deviating most
+top_deviations <- resid_df[order(-resid_df$abs_residual), ][1:10, ]
+top_deviations
+```
+
+# Windowing Tree for Species with >10 Individuals (n=176)
+
+```{r}
+#filter count data to species >10 individuals (i.e. from meta-analysis)
+filtered_quant_data <- 
+  vertebral_counts %>%
+  group_by(species_name) %>%
+  filter(species_name %in% within_species_linear_models_subsetted$species_name) %>%
+    summarise(
+    total_count = mean(log(total_count), na.rm = TRUE), 
+    ln_length_ln_width = mean(ln_length_ln_width, na.rm=TRUE)
+  )
+
+#reorder filtered_quant_data to match the tree tip order
+filtered_quant_data <- filtered_quant_data[match(within_species_linear_models_pruned_tree$tip.label,
+                                                 filtered_quant_data$species_name), ]
+
+#define vectors for downstream analysis
+filtered_total_count <- setNames(filtered_quant_data$total_count, filtered_quant_data$species_name)
+filtered_body_elongation <- setNames(filtered_quant_data$ln_length_ln_width, filtered_quant_data$species_name)
+```
+
+```{r Calculate PICs}
+
+#calculate PICs
+filtered_total_count_pics <- ape::pic(filtered_total_count, within_species_linear_models_pruned_tree)
+filtered_body_elongation_pics <- ape::pic(filtered_body_elongation, within_species_linear_models_pruned_tree)
+
+#node depths from tips (default)
+node_depths <- node.depth.edgelength(within_species_linear_models_pruned_tree)
+
+#total tree height (distance from root to tips)
+tree_height <- max(node_depths)
+
+#node age from root
+node_ages_from_root <- tree_height - node_depths
+
+# Internal nodes only
+n_tips <- length(within_species_linear_models_pruned_tree$tip.label)
+internal_node_ages <- node_ages_from_root[(n_tips + 1):length(node_ages_from_root)]
+
+#define window width and split nodes into bins 
+age_bins <- quantile(internal_node_ages, probs = seq(0, 1, by = 0.10))  #10 bins
+node_bin <- cut(internal_node_ages, breaks = age_bins, include.lowest = TRUE)
+table(node_bin)
+
+#assemble into pic dataframe
+pic_df <- data.frame(
+  age = internal_node_ages,
+  age_bin = node_bin,
+  tc_pic = filtered_total_count_pics,
+  body_elongation_pic = filtered_body_elongation_pics
+)
+
+windowed_corr <- pic_df %>%
+  group_by(age_bin) %>%
+  summarise(
+    cor_val = cor(tc_pic, body_elongation_pic, use = "complete.obs"),
+    n_nodes = n()
+  )
+
+
+windowed_r2 <- pic_df %>%
+  group_by(age_bin) %>%
+  summarise(
+    n_nodes = n(),
+    r2_val = if(n() > 1) summary(lm(body_elongation_pic ~ tc_pic))$r.squared else NA_real_,
+    slope = if(n() > 1) coef(lm(body_elongation_pic ~ tc_pic))[2] else NA_real_,
+    slope_se = if(n() > 1) summary(lm(body_elongation_pic ~ tc_pic))$coefficients[2,2] else NA_real_
+  )
+
+#convert factor bins to numeric midpoints
+windowed_r2$age_mid <- sapply(strsplit(as.character(windowed_r2$age_bin), ","), function(x) {
+  nums <- as.numeric(gsub("\\(|\\[|\\]|\\)", "", x))  #remove brackets/parentheses
+  mean(nums)  #midpoint
+})
+```
+
+```{r Plot R2 by Node Age Bin}
+
+v1 <- ggplot(windowed_r2, aes(x = age_mid, y = r2_val)) +
+  geom_point(colour = "black", size = 3) +
+  geom_line(group = 1, color = "black") +
+  #scale_x_reverse() +  # oldest nodes on left
+  #xlab("Node age (Myr, oldest → youngest)") +
+  #ylab(expression(R^2 ~ "of elongation ~ vertebral count")) +
+  geom_smooth(method = "lm", formula = y ~ x, se = FALSE, colour = "red")+
+  geom_smooth(method = "lm", formula = y ~ poly(x, 2), se = FALSE, color = "blue")+
+  xlab("Node age")+
+  ylab("R-squared (variation explained)")+
+  theme_classic()
+v1
+```
+
+```{r Plot Slope by Node Age Bin}
+
+v2 <- ggplot(windowed_r2, aes(x = age_mid, y = slope)) +
+  geom_point(colour = "black", size = 3) +
+  geom_errorbar(aes(ymin = slope - slope_se, ymax = slope + slope_se), width = 0.3) +  # tails
+  geom_line(group = 1, color = "black") +
+  geom_smooth(method = "lm", formula = y ~ x, se = FALSE, colour = "red")+
+  geom_smooth(method = "lm", formula = y ~ poly(x, 2), se = FALSE, color = "blue")+
+  xlab("Node age")+
+  ylab(expression("Slope (" * beta[1] * ")"))+
+  theme_classic()
+v2
+```
+
+```{r Sliding Window Binning}
+
+window_size <- 20   #number of nodes per window
+step_size <- 1      #how much to slide the window each iteration
+
+#sort by node age
+pic_df <- pic_df %>%
+  filter(!is.na(age)) %>%  # remove rows with missing node age
+  mutate(age = as.numeric(age)) %>%
+  arrange(age)
+
+#initialize empty storage for loop
+results <- data.frame(
+  window_mid = numeric(0),
+  slope = numeric(0),
+  slope_se = numeric(0),
+  r2_val = numeric(0),
+  r2_lower = numeric(0),
+  r2_upper = numeric(0),
+  n_nodes = integer(0)
+)
+
+#sliding window loop
+for (start in seq(1, nrow(pic_df) - window_size + 1, by = step_size)) {
+  window_data <- pic_df[start:(start + window_size - 1), ]
+  
+  #fit linear model
+  model <- lm(body_elongation_pic ~ tc_pic, data = window_data)
+  model_summary <- summary(model)
+  
+  slope_val <- coef(model)[2]
+  slope_se <- model_summary$coefficients[2,2]
+  r2_val <- model_summary$r.squared
+  
+  #bootstrap R²
+  set.seed(1931)
+  boot_r2 <- replicate(100, {
+    sample_data <- window_data[sample(nrow(window_data), replace = TRUE), ]
+    summary(lm(body_elongation_pic ~ tc_pic, data = sample_data))$r.squared
+  })
+  ci <- quantile(boot_r2, probs = c(0.025, 0.975))
+  
+  # store results
+  results <- rbind(results, data.frame(
+    window_mid = mean(window_data$age),
+    slope = slope_val,
+    slope_se = slope_se,
+    r2_val = r2_val,
+    r2_lower = ci[1],
+    r2_upper = ci[2],
+    n_nodes = nrow(window_data)
+  ))
+}
+
+#compare extant slope from PGLS model (1.51067) to slopes for each window and calculate 2-tailed p-value
+results$p_value <- 2 * (1 - pnorm(abs((results$slope - 1.51067)/results$slope_se)))
+
+#how many windows is the slope significantly different from 1.511?
+table(results$p_value < 0.05) #FALSE  TRUE 129    27 - most windows the slope is not sig. diff. from global estimate from extant species, unlikely to have changed across subfamily diversification (I think)
+
+#what are the global trends?
+
+#fit x^2 linear model for slope and window
+lm_slope_poly <- lm(slope ~ poly(window_mid,2), data = results)
+summary(lm_slope_poly) #poly fits better
+
+#fit x^2 linear model for r^2 and window
+lm_r2_poly <- lm(r2_val ~ poly(window_mid,2), data = results)
+summary(lm_r2_poly) #poly fits better
+
+
+```
+
+```{r Plotting of Windowed Slope}
+
+#dummy dataframe for plotting of extant pgls slope and CI
+extant_ribbon <- data.frame(
+  window_mid = seq(0, max(results$window_mid), length.out = 100),
+  slope = 1.51067,  # central value
+  ymin = 1.51067 - 1.96*0.12599,  # lower bound
+  ymax = 1.51067 + 1.96*0.12599   # upper bound
+)
+
+#slope plotting
+v3 <- ggplot(results, aes(x = window_mid, y = slope))+
+  geom_line(colour = "black")+
+  geom_ribbon(aes(ymin = slope - 1.96*slope_se, ymax = slope + 1.96*slope_se),
+            alpha = 0.2, fill = "black")+
+  geom_point(aes(y = slope), size = 1.50, colour = "black", alpha=0.75)+
+  #geom_smooth(method = "lm", formula = y ~ x, se = FALSE, colour = "red")+
+  geom_smooth(method = "lm", formula = y ~ poly(x, 2), se = FALSE, color = "blue")+
+  geom_segment(aes(x = 0, xend = 30, y = 1.511, yend = 1.511),
+             linetype = "dashed", colour = "darkred", linewidth = 1)+ #extant PGLS slope
+  geom_ribbon(data = extant_ribbon, aes(x = window_mid, ymin = ymin, ymax = ymax),
+            fill = "red", alpha = 0.2)+ #adding CI from error of extant pgls slope (0.12599)
+  #scale_x_reverse()+
+  xlab("Median Node Age (Myr)")+
+  ylab(expression(bold("Slope ("*beta[1]*")")))+
+  theme_classic()+
+  theme(legend.position='none',
+                 axis.text = element_text(size=12),
+                 axis.title = element_text(size=12, face='bold'))
+v3
+
+ggsave("Figures/Analysis of Intraspecific Variation/windowed_pic_slope.jpg", v3, dpi=600, width = 10, height = 10, units = "cm")
+
+```
+
+```{r Plotting of Windows R2}
+
+#r2 plotting
+v4 <- ggplot(results, aes(x = window_mid, y = r2_val)) +
+  geom_line(colour = "black") +
+  geom_point(aes(y = r2_val), size = 1.5, colour = "black", alpha = 0.75) +
+  geom_smooth(method = "lm", formula = y ~ poly(x, 2), se = FALSE, colour = "blue") +
+  #geom_ribbon(aes(ymin = r2_lower, ymax = r2_upper), fill = "blue", alpha = 0.2) +  # bootstrap CI ribbon
+  geom_segment(aes(x = 0, xend = 30, y = 0.250, yend = 0.250),
+               linetype = "dashed", colour = "darkred", linewidth = 1)+
+  xlab("Median Node Age (Myr)") +
+  ylab(expression(bold(R^2~"(variation explained)"))) +
+  theme_classic() +
+  theme(legend.position='none',
+        axis.text = element_text(size=12),
+        axis.title = element_text(size=12, face='bold'))
+v4
+
+ggsave("Figures/Analysis of Intraspecific Variation/windowed_pic_r2.jpg", v4, dpi=600, width = 10, height = 10, units = "cm")
+```
+
+```{r Filter to Species with 25 (or more) Individuals}
+#filter for species which have 25 or more individual specimens
+individual_counts_25_above <-
+  vertebral_counts_intraspecific_variation_filtered %>%
+  filter(n_count >= 25) #25 gives a nice range of species (n=17), some very elongate or deep bodied
+
+#identify species
+species_lots_individuals <- individual_counts_25_above$species_name
+
+#filter vertebral counts data (i.e. individuals) to species present defined above
+vertebral_counts_individual_counts_25_above <- 
+  vertebral_counts %>%
+  filter(species_name %in% species_lots_individuals)
+
+#check that it has worked
+all(sort(unique(vertebral_counts_individual_counts_25_above$species_name)) == sort(species_lots_individuals))
+
+#filter NA (i.e. missing aspect ratio)
+vertebral_counts_individual_counts_25_above <- 
+  vertebral_counts_individual_counts_25_above %>%
+  drop_na()
+
+#calculate mean and standard error
+vertebral_counts_individual_counts_25_above_summary <- 
+  vertebral_counts_individual_counts_25_above %>%
+  group_by(species_name, total_count) %>%
+  summarise(
+    mean_aspect_ratio = mean(ln_length_ln_width, na.rm = TRUE),
+    sd_aspect_ratio = ifelse(n() > 1, sd(ln_length_ln_width, na.rm = TRUE), 0),  # Set SD to 0 if only 1 entry
+    n = sum(!is.na(aspect_ratio)),  # Ensure n counts only valid values
+    se_aspect_ratio = ifelse(n > 1, sd_aspect_ratio / sqrt(n), 0)  # Set SE to 0 if SD is 0
+  )
+vertebral_counts_individual_counts_25_above_summary
+```
+
+```{r Check with Astatotilapia calliptera first}
+
+#filter for species == A. callitpera
+astatotilapia_calliptera <- vertebral_counts_individual_counts_25_above_summary %>%
+  filter(species_name == 'Astatotilapia calliptera')
+
+#for jitter:
+astatotilapia_calliptera_all <- 
+  vertebral_counts_individual_counts_25_above %>%
+  filter(species_name == 'Astatotilapia calliptera')
+
+ggplot(astatotilapia_calliptera, aes(x = total_count, y = mean_aspect_ratio, group = species_name))+
+  geom_jitter(data=astatotilapia_calliptera_all, aes(x=total_count, y=ln_length_ln_width), width=0.00, alpha=0.25)+
+  geom_point(colour='red', size=3)+
+  geom_line(aes(group = species_name), size=0.50)+
+  geom_errorbar(aes(ymin = mean_aspect_ratio - sd_aspect_ratio, 
+                    ymax = mean_aspect_ratio + sd_aspect_ratio), 
+                width = 0.25, alpha = 1, colour = "black")+
+  xlab("Total Vertebral Count")+
+  #ylab(expression(bold(paste("Body Aspect Ratio (", mu, ")"))))+
+  ylab("ln[Length]-ln[Depth]")+
+  theme_classic()+
+          theme(legend.position='none',
+                 axis.text = element_text(size=11),
+                 axis.title = element_text(size=11, face='bold'))
+```
+
+```{r Plot All Species >25 individuals (TC versus AR)}
+
+vertebral_counts_individual_counts_25_above_summary <- vertebral_counts_individual_counts_25_above_summary %>%
+  mutate(aspect_ratio_range = cut(mean_aspect_ratio, 
+                                  breaks = c(1, 1.25, 1.50, 1.75, 2), labels = c("Deep Bodied", "Medium Bodied", "Elongate", "Very Elongate")))
+
+#random colour generator
+set.seed(1971)
+random_colours <- sample(colours(), 17)
+
+#plot the mean aspect ratio for vertebral count for each species with error bar
+ggplot(vertebral_counts_individual_counts_25_above_summary, 
+       aes(x = total_count, y = mean_aspect_ratio, color = species_name, group = species_name)) +
+  geom_point(size = 1)+
+  geom_line(size = 0.50)+
+  geom_errorbar(aes(ymin = mean_aspect_ratio - sd_aspect_ratio, 
+                    ymax = mean_aspect_ratio + sd_aspect_ratio), 
+                width = 0.25, alpha = 1) +
+  facet_wrap(~ aspect_ratio_range, scales = "free_y")+  #Facet by aspect range
+  scale_colour_manual(values=c(random_colours))+
+  xlab("Total Vertebral Count")+
+  ylab("ln[Length]-ln[Depth]")+
+  theme_classic()+
+  theme(legend.position = 'right')
+
+```
+
+```{r Plot All Species >25 individuals (TC versus AR)}
+#group body aspect ratio for facet wrapping
+vertebral_counts_individual_counts_25_above_summary <- vertebral_counts_individual_counts_25_above_summary %>%
+  mutate(aspect_ratio_range = cut(mean_aspect_ratio, 
+                                  breaks = c(0.80, 1.25, 1.55, 1.70, 2.5), labels = c("Deep Bodied", "Medium Bodied", "Elongate", "Very Elongate")))
+
+#select species to plot so its less messy
+species_to_retain <- c("Teleogramma depressum", "Teleogramma gracile", 
+                       "Cyprichromis microlepidotus", "Steatocranus rouxi", 
+                       "Serranochromis macrocephalus", "Astatotilapia calliptera", 
+                       "Gobiocichla wonderi", 
+                       "Pseudocrenilabrus multicolor") #, "Steatocranus gibbiceps")
+
+#filter dataframe for the species to plot
+vertebral_counts_individual_counts_25_above_summary_filtered <- 
+  vertebral_counts_individual_counts_25_above_summary %>%
+  filter(species_name %in% species_to_retain)
+
+#plot the mean aspect ratio for vertebral count for each species with error bar and legend
+a1 <- ggplot(vertebral_counts_individual_counts_25_above_summary_filtered, 
+       aes(x = total_count, y = ln_length_ln_width, color = species_name, group = species_name)) +
+  geom_point(size = 1.5)+
+  geom_line(size = 0.50)+
+  geom_errorbar(aes(ymin = mean_aspect_ratio - se_aspect_ratio, 
+                    ymax = mean_aspect_ratio + se_aspect_ratio), 
+                width = 0.50, alpha = 0.75)+
+  facet_wrap(~ aspect_ratio_range, scales = "free_y")+  #Facet by aspect range
+  xlab("Total Vertebral Count")+
+  ylab("ln[Length]-ln[Depth]")+
+  scale_x_continuous(breaks = seq(26, 39, by = 4)) +  # Keeps tick labels at 26-39
+  coord_cartesian(xlim = c(26, 39)) +  # Prevents clipping while keeping axis range
+  theme_classic()+
+  theme(axis.text = element_text(size=11),
+                 axis.title = element_text(size=11, face='bold'))
+a1
+
+ggsave("Figures/Analysis of Intraspecific Variation/total_count_by_aspect_ratio_full.pdf", a1, dpi = 600, width = 10, height = 10, units = "cm")
+
+```
+
+```{r Plot All Species >25 individuals (TC versus AR) - Clean}
+#group body aspect ratio for facet wrapping
+vertebral_counts_individual_counts_25_above_summary <- vertebral_counts_individual_counts_25_above_summary %>%
+  mutate(aspect_ratio_range = cut(mean_aspect_ratio, 
+                                  breaks = c(0.80, 1.25, 1.55, 1.70, 2.5), labels = c("Deep Bodied", "Medium Bodied", "Elongate", "Very Elongate")))
+
+#select species to plot so its less messy
+species_to_retain <- c("Teleogramma depressum", "Teleogramma gracile", 
+                       "Cyprichromis microlepidotus", "Steatocranus rouxi", 
+                       "Serranochromis macrocephalus", "Astatotilapia calliptera", 
+                       "Gobiocichla wonderi", 
+                       "Pseudocrenilabrus multicolor") #"Steatocranus gibbiceps",
+
+#filter dataframe for the species to plot
+vertebral_counts_individual_counts_25_above_summary_filtered <- 
+  vertebral_counts_individual_counts_25_above_summary %>%
+  filter(species_name %in% species_to_retain)
+
+#for jitter:
+total_counts_all <- 
+  vertebral_counts_individual_counts_25_above %>%
+  filter(species_name %in% species_to_retain)
+
+vertebral_counts_individual_counts_25_above_summary
+#assign aspect_ratio_range to total_counts_all
+total_counts_all <- total_counts_all %>%
+  left_join(dplyr::select(vertebral_counts_individual_counts_25_above_summary, species_name, aspect_ratio_range),
+            by = "species_name")
+total_counts_all <- total_counts_all %>% distinct()
+
+#plot the mean aspect ratio for vertebral count for each species with error bar (clean)
+a2 <- ggplot(vertebral_counts_individual_counts_25_above_summary_filtered, 
+       aes(x = total_count, y = mean_aspect_ratio, colour = species_name, group = species_name))+
+  geom_jitter(data = total_counts_all, 
+              aes(x = total_count, y = ln_length_ln_width, colour = species_name, shape=species_name),  
+              width = 0.15, height = 0.02, alpha = 0.75, size=1.5, inherit.aes = FALSE)+
+  scale_colour_manual(values = c(
+  "Teleogramma depressum" = "#CC79A7",
+  "Teleogramma gracile" = "#CC79A7",
+  "Cyprichromis microlepidotus" = "#0072B2",
+  "Steatocranus rouxi" = "#CC79A7",
+  "Serranochromis macrocephalus" = "#CC79A7",
+  "Astatotilapia calliptera" = "#D55E00",
+  "Gobiocichla wonderi" = "#CC79A7",
+  "Pseudocrenilabrus multicolor" = "#CC79A7"
+))+
+  scale_shape_manual(values = c(
+  "Teleogramma depressum" = 17,
+  "Teleogramma gracile" = 17,
+  "Cyprichromis microlepidotus" = 17,
+  "Steatocranus rouxi" = 17,
+  "Serranochromis macrocephalus" = 19,
+  "Astatotilapia calliptera" = 19,
+  "Gobiocichla wonderi" = 17,
+  "Pseudocrenilabrus multicolor" = 19
+))+
+  geom_point(size = 1.5, alpha=0.75, colour='black')+
+  geom_line(size = 0.50, alpha=0.75, colour='black')+
+  geom_errorbar(aes(ymin = mean_aspect_ratio - sd_aspect_ratio, 
+                    ymax = mean_aspect_ratio + sd_aspect_ratio), 
+                width = 1, alpha = 0.75, colour='black')+
+  facet_wrap(~aspect_ratio_range, scales = "free_y", ncol=3, nrow=1)+  #facet by aspect range
+  xlab("Total Vertebral Count")+
+  ylab("ln[Length] - ln[Depth]")+
+  scale_x_continuous(breaks = seq(26, 39, by = 4))+  #keeps tick labels at 26-39
+  coord_cartesian(xlim = c(26, 39))+  #prevents clipping while keeping axis range
+  scale_y_continuous(labels = scales::number_format(accuracy = 0.1))+
+  theme_classic()+
+  theme(legend.position = 'none',
+        axis.text = element_text(size = 12),
+        strip.text = element_text(size = 10),
+        axis.title = element_text(size = 12, face = 'bold'))
+a2
+
+ggsave("Figures/Analysis of Intraspecific Variation/total_count_by_aspect_ratio_clean.svg", a2, width = 25, height = 10, units = "cm")
+```
