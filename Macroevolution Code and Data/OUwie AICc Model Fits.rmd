@@ -108,6 +108,32 @@ combined_aicc_results <- combined_aicc_results %>%
   ))
 ```
 
+```{r Calculate Between Regime AICc Weights}
+
+#calculate the combined AICc weights
+combined_aicc_results_w <- combined_aicc_results %>%
+  group_by(tree_index) %>% #pseudo-replicate
+  mutate(
+    delta_AICc = AICc - min(AICc),
+    weight = exp(-0.5 * delta_AICc) /
+             sum(exp(-0.5 * delta_AICc))
+  ) %>%
+  ungroup()
+
+#compare between regimes
+regime_support <- combined_aicc_results_w %>%
+  group_by(tree_index, regime) %>%
+  summarise(regime_weight = sum(weight), .groups = "drop") %>%
+  group_by(regime) %>%
+  summarise(
+    median_support = median(regime_weight),
+    percentage_support = median_support * 100 #median AICcW is probably fine
+  )
+
+regime_support
+
+```
+
 ```{r Plot the AICc Results}
 
 a1 <- ggplot(combined_aicc_results, aes(x=regime, y=AICc, colour=model))+
@@ -282,6 +308,12 @@ median_aicc_weight <-
 write.csv(median_aicc_weight, "~/Desktop/median_aicc_weights.csv")
 ```
 
+```{r}
 
+head(aicc_results)
+
+
+
+```
 
 
