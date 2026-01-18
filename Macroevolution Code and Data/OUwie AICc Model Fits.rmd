@@ -110,28 +110,28 @@ combined_aicc_results <- combined_aicc_results %>%
 
 ```{r Calculate Between Regime AICc Weights}
 
-#calculate the combined AICc weights
-combined_aicc_results_w <- combined_aicc_results %>%
-  group_by(tree_index) %>% #pseudo-replicate
+#i.e. a relative global comparison
+combined_aicc_results_w_relative <- combined_aicc_results %>%
+  group_by(tree_index) %>%  # compute within each tree
   mutate(
-    delta_AICc = AICc - min(AICc),
-    weight = exp(-0.5 * delta_AICc) /
-             sum(exp(-0.5 * delta_AICc))
+    delta_AICc = AICc - min(AICc),          #dAICc relative to best model on that tree
+    weight = exp(-0.5 * delta_AICc) / sum(exp(-0.5 * delta_AICc))
   ) %>%
   ungroup()
 
-#compare between regimes
-regime_support <- combined_aicc_results_w %>%
-  group_by(tree_index, regime) %>%
-  summarise(regime_weight = sum(weight), .groups = "drop") %>%
-  group_by(regime) %>%
-  summarise(
-    median_support = median(regime_weight),
-    percentage_support = median_support * 100 #median AICcW is probably fine
+combined_aicc_results_w_relative_summary <- df %>%
+  group_by(model, regime) %>%
+  summarize(
+    median_weight = median(weight),
+    min_weight = min(weight),
+    max_weight = max(weight),
+    .groups = 'drop'
   )
 
-regime_support
+combined_aicc_results_w_relative_summary
 
+#export to desktop because I am so very tired
+write.csv(combined_aicc_results_w_relative_summary, "~/Desktop/combined_aicc_results_w_relative_summary.csv")
 ```
 
 ```{r Plot the AICc Results}
