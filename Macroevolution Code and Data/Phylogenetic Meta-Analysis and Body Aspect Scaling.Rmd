@@ -765,6 +765,10 @@ v4
 ggsave("Figures/Analysis of Intraspecific Variation/windowed_pic_r2.jpg", v4, dpi=600, width = 10, height = 10, units = "cm")
 ```
 
+
+# Analysis of individuals >=25 individuals
+
+
 ```{r Filter to Species with 25 (or more) Individuals}
 #filter for species which have 25 or more individual specimens
 individual_counts_25_above <-
@@ -898,7 +902,7 @@ ggsave("Figures/Analysis of Intraspecific Variation/total_count_by_aspect_ratio_
 #group body aspect ratio for facet wrapping
 vertebral_counts_individual_counts_25_above_summary <- vertebral_counts_individual_counts_25_above_summary %>%
   mutate(aspect_ratio_range = cut(mean_aspect_ratio, 
-                                  breaks = c(0.80, 1.25, 1.55, 1.70, 2.5), labels = c("Deep Bodied", "Medium Bodied", "Elongate", "Very Elongate")))
+                                  breaks = c(0.80, 1.25, 1.55, 1.70, 2.5), labels = c("Deep Bodied", "Elongate", "Elongate", "Very Elongate")))
 
 #select species to plot so its less messy
 species_to_retain <- c("Teleogramma depressum", "Teleogramma gracile", 
@@ -958,8 +962,8 @@ a2 <- ggplot(vertebral_counts_individual_counts_25_above_summary_filtered,
   facet_wrap(~aspect_ratio_range, scales = "free_y", ncol=3, nrow=1)+  #facet by aspect range
   xlab("Total Vertebral Count")+
   ylab("ln[Length] - ln[Depth]")+
-  scale_x_continuous(breaks = seq(26, 39, by = 4))+  #keeps tick labels at 26-39
-  coord_cartesian(xlim = c(26, 39))+  #prevents clipping while keeping axis range
+  scale_x_continuous(breaks = seq(24, 40, by = 4))+  #keeps tick labels at 25-39
+  coord_cartesian(xlim = c(24, 40))+  #prevents clipping while keeping axis range
   scale_y_continuous(labels = scales::number_format(accuracy = 0.1))+
   theme_classic()+
   theme(legend.position = 'none',
@@ -968,5 +972,5 @@ a2 <- ggplot(vertebral_counts_individual_counts_25_above_summary_filtered,
         axis.title = element_text(size = 12, face = 'bold'))
 a2
 
-ggsave("Figures/Analysis of Intraspecific Variation/total_count_by_aspect_ratio_clean.svg", a2, width = 25, height = 10, units = "cm")
+ggsave("Figures/Analysis of Intraspecific Variation/total_count_by_aspect_ratio_clean.svg", a2, width = 22, height = 10, units = "cm")
 ```
