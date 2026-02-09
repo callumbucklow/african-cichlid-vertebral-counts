@@ -112,15 +112,11 @@ all_species_tree_piscivore_pruned_edges <- all_species_tree_piscivore_pruned$edg
 #create trait variable for fitting discrete models:
 all_species_piscivore <- all_species_stored_data_piscivore$piscivore
 names(all_species_piscivore) <- row.names(all_species_stored_data_piscivore)
-
-
-all_species_tree_piscivore_pruned
 ```
 
 ```{r Fit Piscivore Discrete Character Trait Evolution Models for All Species, echo=FALSE, eval=FALSE}
 # Fit models of discrete character evolution. Note that since the trait we are interested in is binary, we do not need to also fit a symmetrical (SYM) model to the data as it reduces to an equal rates model for k = 2. 
 #fit_ER_all_species_piscivore <- fitDiscrete(all_species_tree_piscivore_pruned, all_species_piscivore, model = 'ER')
-
 
 #fit_ARD_all_species_piscivore <- fitDiscrete(all_species_tree_piscivore_pruned, all_species_piscivore, model = 'ARD')
 
@@ -135,28 +131,23 @@ all_species_tree_piscivore_pruned
 #all_species_tree_piscivore_pruned$edge.length <- all_species_tree_piscivore_pruned$edge.length/all_species_tree_piscivore_pruned$edge.length
 
 #Fit ARD model for piscivorous behaviour for all species onto the tree:
-#all_species_piscivore_simmap <- make.simmap(tree = all_species_tree_piscivore_pruned, x = all_species_piscivore, model = 'ARD', nsim = 10000)
+all_species_piscivore_simmap <- make.simmap(tree = all_species_tree_piscivore_pruned, x = all_species_piscivore, model = 'ARD', nsim = 1000)
 
 #save the multiphylo simmap object so analysis doesn't need to be redone:
-#saveRDS(all_species_piscivore_simmap, 'Data/all_species_piscivore_simmap.rds')
+saveRDS(all_species_piscivore_simmap, 'Data/all_species_piscivore_simmap.rds')
 
 #store all the trees simulated in the simmap creation, this will make it easier to plot the uncertainty at nodes etc.
-#posterior_all_species_piscivore_simmap <- 
-  #describe.simmap(all_species_piscivore_simmap, plot = FALSE)
+posterior_all_species_piscivore_simmap <- 
+  describe.simmap(all_species_piscivore_simmap, plot = TRUE)
 
-# Save simmap object as RDS - this is important if the simmap requires output for further analysis
-#saveRDS(posterior_all_species_piscivore_simmap, 'Data/posterior_all_species_piscivore_simmap.rds')
+#save simmap object as RDS - this is important if the simmap requires output for further analysis
+saveRDS(posterior_all_species_piscivore_simmap, 'Data/posterior_all_species_piscivore_simmap.rds')
 ```
 
 ```{r Plot Simmap object for Piscivory for All Species}
 
 #import the simmap object:
-#posterior_all_species_piscivore_simmap <- readRDS("Data/posterior_all_species_piscivore_simmap.rds")
-
-#replace branch lengths to those of the original tree for each tree:
-#for (i in 1:length(posterior_all_species_piscivore_simmap$tree)) {
-  #posterior_all_species_piscivore_simmap$tree[[i]]$edge.length <- all_species_tree_piscivore_pruned_edges
-#}
+posterior_all_species_piscivore_simmap <- readRDS("Data/posterior_all_species_piscivore_simmap.rds")
 
 #defining tip colours vector
 tip_colours_vector <- as.data.frame(all_species_piscivore)
@@ -197,12 +188,6 @@ add.scale.bar()
 
 dev.off()
 ```
-
-
-
-
-
-
 
 ```{r Prune Simmap object for Piscivory to Lake Malawi}
 
@@ -288,6 +273,11 @@ dev.off()
 #dev.off()
 ```
 
+
+
+
+
+
 # Mapping Water System onto Whole Phylogeny (Discrete)
 
 ```{r Prepare All Species Data for Water System Discrete Modelling}
@@ -304,16 +294,16 @@ all_species_tree_water_system_pruned_edges <- all_species_tree_piscivore_pruned$
 
 ```{r Fit Water System Discrete Character Trait Evolution Models for All Species, echo=FALSE, eval=FALSE}
 # Fit models of discrete character evolution. Note that since the trait we are interested in is NOT binary, we should also test the fit of a symmetrical model (sym) in which forward and reverse transitions share the same parameter
-# fit_ER_all_species_water_system <- fitDiscrete(all_species_tree_piscivore_pruned, all_species_water_system, model = 'ER')
+ #fit_ER_all_species_water_system <- fitDiscrete(all_species_tree_piscivore_pruned, all_species_water_system, model = 'ER')
 # 
-# fit_ARD_all_species_water_system <- fitDiscrete(all_species_tree_piscivore_pruned, all_species_water_system, model = 'ARD')
+ #fit_ARD_all_species_water_system <- fitDiscrete(all_species_tree_piscivore_pruned, all_species_water_system, model = 'ARD')
 # 
-# fit_SYM_all_species_water_system <- fitDiscrete(all_species_tree_piscivore_pruned, all_species_water_system, model = 'SYM')
+ #fit_SYM_all_species_water_system <- fitDiscrete(all_species_tree_piscivore_pruned, all_species_water_system, model = 'SYM')
 # 
 # #compare the fit of the three models:
-# aicw(c("ER" = fit_ER_all_species_water_system$opt$aicc,
-#        "ARD" = fit_ARD_all_species_water_system$opt$aicc,
-#        "SYM" = fit_SYM_all_species_water_system$opt$aicc))
+ #aicw(c("ER" = fit_ER_all_species_water_system$opt$aicc,
+       # "ARD" = fit_ARD_all_species_water_system$opt$aicc,
+       # "SYM" = fit_SYM_all_species_water_system$opt$aicc))
 # #ARD model fits the data best
 ```
 
@@ -322,35 +312,30 @@ all_species_tree_water_system_pruned_edges <- all_species_tree_piscivore_pruned$
 #Rescale all branches of the tree to 1 to avoid issues with
 # all_species_tree_piscivore_pruned$edge.length <- all_species_tree_piscivore_pruned$edge.length/all_species_tree_piscivore_pruned$edge.length
 # 
-# #Fit ARD model for water system occupancy for all species onto the tree:
-# all_species_water_system_simmap <- make.simmap(tree = all_species_tree_piscivore_pruned, x = all_species_water_system, model = 'ARD', nsim = 10000)
+#Fit ARD model for water system occupancy for all species onto the tree:
+ all_species_water_system_simmap <- make.simmap(tree = all_species_tree_piscivore_pruned, x = all_species_water_system, model = 'SYM', nsim = 100)
 # 
 # #save the multiphylo simmap object so analysis doesn't need to be redone:
-# saveRDS(all_species_water_system_simmap, 'Data/all_species_water_system_simmap.rds')
+ saveRDS(all_species_water_system_simmap, 'Data/all_species_water_system_simmap.rds')
 # 
-# #store all the trees simulated in the simmap creation, this will make it easier to plot the uncertainty at nodes etc.
-# posterior_all_species_water_system_simmap <- 
-#   describe.simmap(all_species_water_system_simmap, plot = FALSE)
+ #store all the trees simulated in the simmap creation, this will make it easier to plot the uncertainty at nodes etc.
+posterior_all_species_water_system_simmap <- 
+ describe.simmap(all_species_water_system_simmap, plot = TRUE)
 # 
 # # Save simmap object as RDS - this is important if the simmap requires output for further analysis
-# saveRDS(posterior_all_species_water_system_simmap, 'Data/posterior_all_species_water_system_simmap.rds')
+ saveRDS(posterior_all_species_water_system_simmap, 'Data/posterior_all_species_water_system_simmap.rds')
 ```
 
 ```{r Prepare Simmap object for Water System for All Species}
 
 #import the simmap object:
 posterior_all_species_water_system_simmap <- readRDS("Data/posterior_all_species_water_system_simmap.rds")
-
-#replace branch lengths to those of the original tree for each tree - probably not necessary.
-for (i in 1:length(posterior_all_species_water_system_simmap$tree)) {
-  posterior_all_species_water_system_simmap$tree[[i]]$edge.length <- all_species_tree_water_system_pruned_edges
-}
 ```
 
 ```{r Plot Simmap object for Water System for All Species}
 
 #create new tree object and switch edge lengths back to original tree (since we updated them to one)
-all_species_tree_piscivore_pruned$edge.length <- all_species_tree_water_system_pruned_edges
+#all_species_tree_piscivore_pruned$edge.length <- all_species_tree_water_system_pruned_edges
 
 pdf("Figures/Mapping Discrete Traits onto Phylogeny/posterior_all_species_water_system_simmap.pdf", width = 8.4, height = 11)
 
@@ -415,23 +400,23 @@ all_species_riverine_lacustrine[all_species_riverine_lacustrine %in% c("Lake Mal
 names(all_species_riverine_lacustrine) <- names(all_species_water_system)
 
 #rescale all branches of the tree to 1 to avoid issues with simmap estimation
-all_species_tree_riverine_lacustrine <- all_species_tree_piscivore_pruned
-all_species_tree_riverine_lacustrine$edge.length <- all_species_tree_riverine_lacustrine$edge.length/all_species_tree_riverine_lacustrine$edge.length
+#all_species_tree_riverine_lacustrine <- all_species_tree_piscivore_pruned
+#all_species_tree_riverine_lacustrine$edge.length <- all_species_tree_riverine_lacustrine$edge.length/all_species_tree_riverine_lacustrine$edge.length
 ```
 
 ```{r Fit ARD Model for Riverine or Lacustrine to All Species Tree, echo=FALSE, eval=FALSE}
 #Fit ARD model for riverine or lacustrine for all species onto the tree:
-# all_species_riverine_lacustrine_simmap <- make.simmap(tree = all_species_tree_piscivore_pruned, x = all_species_riverine_lacustrine, model = 'ARD', nsim = 10000)  
+ all_species_riverine_lacustrine_simmap <- make.simmap(tree = all_species_tree_piscivore_pruned, x = all_species_riverine_lacustrine, model = 'ARD', nsim = 1000)  
 # 
 # #save the multiphylo simmap object so analysis doesn't need to be redone:
-# saveRDS(all_species_riverine_lacustrine_simmap, 'Data/all_species_riverine_lacustrine_simmap.rds')
+ saveRDS(all_species_riverine_lacustrine_simmap, 'Data/all_species_riverine_lacustrine_simmap.rds')
 # 
 # #store all the trees simulated in the simmap creation, this will make it easier to plot the uncertainty at nodes etc.
-# posterior_all_species_riverine_lacustrine_simmap <- 
-#   describe.simmap(all_species_riverine_lacustrine_simmap, plot = FALSE)
+ posterior_all_species_riverine_lacustrine_simmap <- 
+   describe.simmap(all_species_riverine_lacustrine_simmap, plot = TRUE)
 # 
 # #Save simmap object as RDS - this is important if the simmap requires output for further analysis
-# saveRDS(posterior_all_species_riverine_lacustrine_simmap, 'Data/posterior_all_species_riverine_lacustrine_simmap.rds')
+ saveRDS(posterior_all_species_riverine_lacustrine_simmap, 'Data/posterior_all_species_riverine_lacustrine_simmap.rds')
 ```
 
 ```{r Prepare Simmap object for Lacustrine or Riverine for All Species}
@@ -439,16 +424,9 @@ all_species_tree_riverine_lacustrine$edge.length <- all_species_tree_riverine_la
 #import the simmap object:
 posterior_all_species_riverine_lacustrine_simmap <- readRDS("Data/posterior_all_species_riverine_lacustrine_simmap.rds")
 
-#replace branch lengths to those of the original tree for each tree - probably not necessary.
-for (i in 1:length(posterior_all_species_riverine_lacustrine_simmap$tree)) {
-  posterior_all_species_riverine_lacustrine_simmap$tree[[i]]$edge.length <- all_species_tree_water_system_pruned_edges
-}
 ```
 
 ```{r Plot Simmap object for Riverine or Lacustrine for All Species}
-
-#create new tree object and switch edge lengths back to original tree (since we updated them to one)
-all_species_tree_piscivore_pruned$edge.length <- all_species_tree_water_system_pruned_edges
 
 pdf("Figures/Mapping Discrete Traits onto Phylogeny/posterior_all_species_riverine_lacustrine_simmap.pdf", width = 8.4, height = 11)
 
@@ -500,8 +478,11 @@ dev.off()
 all_species_depth <- all_species_stored_data_piscivore$depth
 names(all_species_depth) <- all_species_stored_data_piscivore$species_name
 
+#replace "bathydemersal" with "demersal" to remove one species which has this for some reason
+all_species_depth[all_species_depth == "bathydemersal"] <- "demersal"
+
 #save edge lengths for later:
-all_species_tree_depth_pruned_edges <- all_species_tree_piscivore_pruned$edge.length
+#all_species_tree_depth_pruned_edges <- all_species_tree_piscivore_pruned$edge.length
 
 ```
 
@@ -514,31 +495,28 @@ all_species_tree_depth_pruned_edges <- all_species_tree_piscivore_pruned$edge.le
 # fit_SYM_all_species_depth <- fitDiscrete(all_species_tree_piscivore_pruned, all_species_depth, model = 'SYM')
 # 
 # #compare the fit of the three models:
-# aicw(c("ER" = fit_ER_all_species_depth$opt$aicc,
-#        "ARD" = fit_ARD_all_species_depth$opt$aicc,
-#        "SYM" = fit_SYM_all_species_depth$opt$aicc))
+ #aicw(c("ER" = fit_ER_all_species_depth$opt$aicc,
+        #"ARD" = fit_ARD_all_species_depth$opt$aicc,
+        #"SYM" = fit_SYM_all_species_depth$opt$aicc))
 #ARD model fits the data best
 ```
 
 ```{r Fit ARD Model for Depth Preference to All Species Tree}
 
-#Rescale all branches of the tree to 1 to avoid issues with
-# all_species_tree_piscivore_pruned$edge.length <- all_species_tree_piscivore_pruned$edge.length/all_species_tree_piscivore_pruned$edge.length
-# 
 # #Fit ARD model for piscivorous behaviour for all species onto the tree:
-# all_species_depth_simmap <- make.simmap(tree = all_species_tree_piscivore_pruned, 
-#                                            x = all_species_depth, 
-#                                            model = 'ARD', nsim = 10000)
+ all_species_depth_simmap <- make.simmap(tree = all_species_tree_piscivore_pruned, 
+                                            x = all_species_depth, 
+                                            model = 'ARD', nsim = 1000)
 # 
 # #save simmap object to prevent needing to redo the analysis:
-# saveRDS(all_species_depth_simmap, 'Data/all_species_depth_simmap.rds')
+ saveRDS(all_species_depth_simmap, 'Data/all_species_depth_simmap.rds')
 # 
 # #store all the trees simulated in the simmap creation, this will make it easier to plot the uncertainty at nodes etc.
-# posterior_all_species_depth_simmap <- 
-#   describe.simmap(all_species_depth_simmap, plot = FALSE)
+ posterior_all_species_depth_simmap <- 
+   describe.simmap(all_species_depth_simmap, plot = TRUE)
 # 
-# # Save simmap object as RDS - this is important if the simmap requires output for further analysis
-# saveRDS(posterior_all_species_depth_simmap, 'Data/posterior_all_species_depth_simmap.rds')
+#save simmap object as RDS - this is important if the simmap requires output for further analysis
+saveRDS(posterior_all_species_depth_simmap, 'Data/posterior_all_species_depth_simmap.rds')
 ```
 
 ```{r Plot Simmap object for Depth Preference for All Species}
@@ -548,8 +526,7 @@ posterior_all_species_depth_simmap <-
   readRDS('Data/posterior_all_species_depth_simmap.rds')
 
 #define colours for each depth preference
-depth_colours <- c("bathydemersal" = "#D81B60",
-                                "benthopelagic" = "#1E88E5",
+depth_colours <- c("benthopelagic" = "#1E88E5",
                                 "demersal" = "#FFC107", 
                                 "pelagic" = "#004D40") 
 
@@ -565,7 +542,7 @@ tip_colours_vector <- depth_colours[species_to_type[all_species_tree_piscivore_p
 pdf("Figures/Mapping Discrete Traits onto Phylogeny/posterior_all_species_depth_simmap.pdf", width = 8.4, height = 11)
 
 #replace branch lengths back to original (remember we scaled to 1 for model fit)
-all_species_tree_piscivore_pruned$edge.length <- all_species_tree_depth_pruned_edges
+#all_species_tree_piscivore_pruned$edge.length <- all_species_tree_depth_pruned_edges
 
 # Plot reconstruction with posterior probabilities at each node
 plot(all_species_tree_piscivore_pruned,
@@ -665,48 +642,46 @@ tribe_category <- case_when(
 #redine all_species_tribe
 all_species_tribe <- tribe_category
 names(all_species_tribe) <- all_species_stored_data_piscivore$species_name
-
-#save edge lengths for later:
-all_species_tree_tribe_pruned_edges <- all_species_tree_piscivore_pruned$edge.length
 ```
 
 ```{r Fit Tribal Discrete Character Trait Evolution Models for All Species}
 ##fit models of discrete character evolution. Note that since the trait we are interested in is NOT binary, we should also test the fit of a symmetrical model (sym) in which forward and reverse transitions share the same parameter
- #fit_ER_all_species_tribe<- fitDiscrete(all_species_tree_piscivore_pruned, all_species_tribe, model = 'ER')
+ fit_ER_all_species_tribe<- fitDiscrete(all_species_tree_piscivore_pruned, all_species_tribe, model = 'ER')
 # 
- #fit_ARD_all_species_tribe <- fitDiscrete(all_species_tree_piscivore_pruned, all_species_tribe, model = 'ARD')
+ fit_ARD_all_species_tribe <- fitDiscrete(all_species_tree_piscivore_pruned, all_species_tribe, model = 'ARD')
 # 
- #fit_SYM_all_species_tribe <- fitDiscrete(all_species_tree_piscivore_pruned, all_species_tribe, model = 'SYM')
+fit_SYM_all_species_tribe <- fitDiscrete(all_species_tree_piscivore_pruned, all_species_tribe, model = 'SYM')
 # 
 # #compare the fit of the three models:
- #aicw(c("ER" = fit_ER_all_species_tribe$opt$aicc,
-        #"ARD" = fit_ARD_all_species_tribe$opt$aicc,
-        #"SYM" = fit_SYM_all_species_tribe$opt$aicc))
+ aicw(c("ER" = fit_ER_all_species_tribe$opt$aicc,
+        "ARD" = fit_ARD_all_species_tribe$opt$aicc,
+        "SYM" = fit_SYM_all_species_tribe$opt$aicc))
 # #ER model fits the data best
 ```
+
 ```{r Fit ER Model for Tribe to All Species Tree}
 
 #Rescale all branches of the tree to 1 to avoid issues with
 #all_species_tree_piscivore_pruned$edge.length <- all_species_tree_piscivore_pruned$edge.length/all_species_tree_piscivore_pruned$edge.length
 
-#Fit ARD model for tribe for all species onto the tree:
-#set.seed(1931)
-#all_species_tribe_simmap <- make.simmap(tree = all_species_tree_piscivore_pruned, 
-                                           #x = all_species_tribe, 
-                                           #model = 'ER', nsim = 10000)
+#Fit SYM model for tribe for all species onto the tree:
+set.seed(1931)
+all_species_tribe_simmap <- make.simmap(tree = all_species_tree_piscivore_pruned, 
+                                           x = all_species_tribe, 
+                                           model = 'ER', nsim = 1000)
 
 #save simmap object to prevent needing to redo the analysis:
-#saveRDS(all_species_tribe_simmap, 'Data/all_species_tribe_simmap.rds')
+saveRDS(all_species_tribe_simmap, 'Data/all_species_tribe_simmap.rds')
 
 #store all the trees simulated in the simmap creation, this will make it easier to plot the uncertainty at nodes etc.
-#posterior_all_species_tribe_simmap <- 
-  #describe.simmap(all_species_tribe_simmap, plot = FALSE)
+posterior_all_species_tribe_simmap <- 
+  describe.simmap(all_species_tribe_simmap, plot = TRUE)
 
 #Save simmap object as RDS - this is important if the simmap requires output for further analysis
-#saveRDS(posterior_all_species_tribe_simmap, 'Data/posterior_all_species_tribe_simmap.rds')
+saveRDS(posterior_all_species_tribe_simmap, 'Data/posterior_all_species_tribe_simmap.rds')
 ```
 
-```{r Plot Simmap object for Brooding Behaviour for All Species}
+```{r Plot Simmap object for Tribe/Haplochromine for All Species}
 
 #import the simmap with all 10000 trees:
 #posterior_all_species_tribe_simmap <- 
@@ -743,14 +718,6 @@ add.scale.bar()
 
 dev.off()
 ```
-
-
-
-
-
-
-
-
 
 # Fitting Discrete Model of Trait Evolution for Brooding Behaviour
 
