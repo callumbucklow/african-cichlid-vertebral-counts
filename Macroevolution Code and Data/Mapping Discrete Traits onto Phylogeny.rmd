@@ -273,9 +273,72 @@ dev.off()
 #dev.off()
 ```
 
+```{r Fit ARD Model for Piscivore Behaviour to All Species Tree (Ancestral Reconstruction)}
+#Rescale all branches of the tree to 1
+all_species_tree_piscivore_pruned$edge.length <- all_species_tree_piscivore_pruned$edge.length/all_species_tree_piscivore_pruned$edge.length
 
+#Fit ARD model for piscivorous behaviour for all species onto the tree:
+all_species_piscivore_simmap_scaled <- make.simmap(tree = all_species_tree_piscivore_pruned, x = all_species_piscivore, model = 'ARD', nsim = 1000)
 
+#save the multiphylo simmap object so analysis doesn't need to be redone:
+saveRDS(all_species_piscivore_simmap_scaled, 'Data/all_species_piscivore_simmap_scaled.rds')
 
+#store all the trees simulated in the simmap creation, this will make it easier to plot the uncertainty at nodes etc.
+posterior_all_species_piscivore_simmap_scaled <- 
+  describe.simmap(all_species_piscivore_simmap_scaled, plot = TRUE)
+
+#save simmap object as RDS - this is important if the simmap requires output for further analysis
+saveRDS(posterior_all_species_piscivore_simmap_scaled, 'Data/posterior_all_species_piscivore_simmap_scaled.rds')
+```
+
+```{r Plot Simmap object for Piscivory for All Species}
+
+#import the simmap object:
+posterior_all_species_piscivore_simmap <- readRDS("Data/posterior_all_species_piscivore_simmap_scaled.rds")
+
+#defining tip colours vector
+tip_colours_vector <- as.data.frame(all_species_piscivore)
+tip_colours_vector$species_name <- rownames(tip_colours_vector)
+rownames(tip_colours_vector) <- NULL
+
+#extract tip labels from the pruned tree
+tip_labels <- all_species_tree_piscivore_pruned$tip.label
+
+#create a named vector of colors matching the tip labels
+tip_colours_vector <- ifelse(
+  tip_labels %in% tip_colours_vector$species_name[tip_colours_vector$all_species_piscivore == "non-piscivore"],
+  "darkgreen",
+  "purple"
+)
+
+#replace edge lengths with correct lengths for plotting
+all_species_tree_piscivore_pruned$edge.length <- 
+all_species_tree_piscivore_pruned_edges
+
+pdf("Figures/Mapping Discrete Traits onto Phylogeny/posterior_all_species_piscivore_simmap_scaled.pdf", width = 8.4, height = 11)
+
+#plot reconstruction with posterior probabilities at each node
+#define the piscivory colours for plotting onto the phylogeny
+piscivore_colours <- c("non-piscivore" = 'darkgreen',  "piscivore" = 'purple')
+
+plot(all_species_tree_piscivore_pruned,
+     type="fan",
+     cex=0.25,
+     label.offset = 0.5,
+     tip.color = tip_colours_vector)
+nodelabels(pie=posterior_all_species_piscivore_simmap_scaled$ace,piecol=piscivore_colours,
+cex=0.25)
+# Add the legend
+add.simmap.legend(colors=piscivore_colours, 
+                  prompt=FALSE, 
+                  fsize=0.75,     
+                  size=10, 
+                  x = 1,       
+                  y = 20)        
+add.scale.bar()
+
+dev.off()
+```
 
 
 # Mapping Water System onto Whole Phylogeny (Discrete)
@@ -563,6 +626,78 @@ add.simmap.legend(colors=depth_colours,
 add.scale.bar()
 
 dev.off()
+```
+
+```{r Fit ARD Model for Depth Preference to All Species Tree (Ancestral Reconstruction)}
+
+#rescale branch lengths
+all_species_tree_piscivore_pruned$edge.length <- all_species_tree_piscivore_pruned$edge.length/all_species_tree_piscivore_pruned$edge.length
+
+# #Fit ARD model for piscivorous behaviour for all species onto the tree:
+ all_species_depth_simmap_scaled <- make.simmap(tree = all_species_tree_piscivore_pruned, 
+                                            x = all_species_depth, 
+                                            model = 'ARD', nsim = 1000)
+# 
+# #save simmap object to prevent needing to redo the analysis:
+ saveRDS(all_species_depth_simmap_scaled, 'Data/all_species_depth_simmap_scaled.rds')
+# 
+# #store all the trees simulated in the simmap creation, this will make it easier to plot the uncertainty at nodes etc.
+ posterior_all_species_depth_simmap_scaled <- 
+   describe.simmap(all_species_depth_simmap_scaled, plot = TRUE)
+# 
+#save simmap object as RDS - this is important if the simmap requires output for further analysis
+saveRDS(posterior_all_species_depth_simmap_scaled, 'Data/posterior_all_species_depth_simmap_scaled.rds')
+```
+
+```{r Plot Simmap object for Depth Preference for All Species (Ancestral Reconstruction)}
+
+#import the simmap with all 1000 trees:
+posterior_all_species_depth_simmap_scaled <-
+  readRDS('Data/posterior_all_species_depth_simmap_scaled.rds')
+
+#define colours for each depth preference
+depth_colours <- c("benthopelagic" = "#1E88E5",
+                                "demersal" = "#FFC107", 
+                                "pelagic" = "#004D40") 
+
+#defining tip colours vector
+tip_colours_vector <- as.data.frame(all_species_depth)
+tip_colours_vector$species_name <- rownames(tip_colours_vector)
+rownames(tip_colours_vector) <- NULL
+
+# Match tip labels directly to their corresponding colors
+species_to_type <- setNames(tip_colours_vector$all_species_depth, tip_colours_vector$species_name)
+tip_colours_vector <- depth_colours[species_to_type[all_species_tree_piscivore_pruned$tip.label]]
+
+#replace branch lengths to original scale
+all_species_tree_piscivore_pruned$edge.length <- all_species_tree_piscivore_pruned_edges 
+
+pdf("Figures/Mapping Discrete Traits onto Phylogeny/posterior_all_species_depth_simmap_scaled.pdf", width = 8.4, height = 11)
+
+#replace branch lengths back to original (remember we scaled to 1 for model fit)
+#all_species_tree_piscivore_pruned$edge.length <- all_species_tree_depth_pruned_edges
+
+# Plot reconstruction with posterior probabilities at each node
+plot(all_species_tree_piscivore_pruned,
+     type="fan",
+     cex=0.25,
+     label.offset = 0.5,
+     tip.color = tip_colours_vector)
+nodelabels(pie=posterior_all_species_depth_simmap_scaled$ace,piecol=depth_colours,
+cex=0.25)
+
+# Add the legend
+add.simmap.legend(colors=depth_colours, 
+                  prompt=FALSE, 
+                  fsize=0.75,     
+                  size=10, 
+                  x = 1,       
+                  y = 20)        
+add.scale.bar()
+
+dev.off()
+
+
 ```
 
 ```{r Prune Simmap object for Depth Preference to Lake Malawi}
