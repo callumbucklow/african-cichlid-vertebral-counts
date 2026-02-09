@@ -1,0 +1,389 @@
+---
+title: Fit Multiple OU Models to Discrete Mapping Data using OUwie (Riverine versus
+  Lacustrine)
+author: "Callum Bucklow"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r Setup, include=FALSE}
+knitr::opts_chunk$set(message = FALSE) ##Remove messages for all chunks
+knitr::opts_chunk$set(warning = FALSE) ##Remove warnings for all chunks
+```
+
+```{r Libraries}
+# Load the necessary libraries
+#library(tidyverse) #data wrangling
+library(tidyr) #data wrangling
+library(dplyr)
+library(ggplot2) #for plotting when I don't want to use Base R
+library(gridExtra) #for ggplot, to plot multiple plots together
+library(fitdistrplus) #for fitting distributions to data
+library(ape) #for phylogeny manipulation and all the rest
+library(phytools) #for various things, including phylogenetic PCA, PGLM etc.
+library(nlme) #for pgls
+library(geiger) #for fitting trait evolution models to phylogenies
+library(OUwie) #for fitting multiple regime OU models to trait evolution models
+library(caper) #for pgls and will report pseudo-r2 for these models
+library(parallel)
+library(future.apply)
+```
+
+# Fitting Multiple OU Models to Water System Simmap (Riverine versus Lacustrine)
+
+```{r Import the Simmap Object}
+
+all_species_riverine_lacustrine_simmap <- readRDS('Data/all_species_riverine_lacustrine_simmap.rds')
+
+```
+
+```{r Prepare All Species Data with their Riverine or Lacustrine Occupancy}
+#remember we are using the tree that has been pruned to those for which we know whether they are piscivorous or not
+
+#import qualitative data
+all_species_stored_data_piscivore <-
+  read.csv('Data/all_species_stored_data_piscivore.csv')
+
+#import quant data
+all_species_matrix_data_piscivore <-  read.csv('Data/all_species_matrix_data_piscivore.csv')
+
+#import piscivore pruned tree:
+all_species_tree_piscivore_pruned <- read.tree('Data/all_species_tree_piscivore_pruned.txt')
+
+#create trait variable for fitting discrete models:
+all_species_water_system <- all_species_stored_data_piscivore$water_system
+names(all_species_water_system) <- all_species_stored_data_piscivore$species_name
+
+#create a copy of all_species_water_system
+all_species_riverine_lacustrine <- all_species_water_system
+
+#convert to character to avoid factor level issues
+all_species_riverine_lacustrine <- as.character(all_species_riverine_lacustrine)
+
+#replace specific lake names with 'Lacustrine'
+all_species_riverine_lacustrine[all_species_riverine_lacustrine %in% c("Lake Malawi", "Lake Tanganyika", "Lake Victoria")] <- "Lacustrine"
+
+#redefine the rownames
+names(all_species_riverine_lacustrine) <- names(all_species_water_system)
+
+#convert matrix into dataframe
+all_species_matrix_data_df <- as.data.frame(all_species_matrix_data_piscivore)
+
+#isolate quantitative data
+all_species_riverine_lacustrine_matrix <- 
+  all_species_matrix_data_df %>%
+  filter(names(all_species_riverine_lacustrine) %in% all_species_matrix_data_df$X)
+
+#save edge lengths for later:
+all_species_tree_water_system_pruned_edges <- all_species_tree_piscivore_pruned$edge.length
+```
+
+```{r Define function to fit OUwie Models}
+
+fit_multiple_regime_models <- function(
+  tree_list,
+  species_data,
+  matrix_data,
+  simmap_tree_index,
+  fit_common_models = FALSE
+) {
+  ## Prepare OUwie dataframe
+  ouwie_df <- data.frame(
+    species_name = names(species_data),
+    variable = as.numeric(species_data),
+    tc = as.numeric(matrix_data[, 4])
+  )
+
+  fits <- list()
+  aic_values <- c()
+
+  ## Fit common models only once
+  if (fit_common_models) {
+    fits$BM1 <- OUwie(
+      tree_list[[simmap_tree_index]],
+      ouwie_df,
+      model = "BM1",
+      simmap.tree = TRUE
+    )
+
+    fits$OU1 <- OUwie(
+      tree_list[[simmap_tree_index]],
+      ouwie_df,
+      model = "OU1",
+      simmap.tree = TRUE,
+      root.station = FALSE
+    )
+
+    aic_values <- c(
+      BM1 = fits$BM1$AIC,
+      OU1 = fits$OU1$AIC
+    )
+  } else {
+    aic_values <- c(
+      BM1 = NA,
+      OU1 = NA
+    )
+  }
+
+  ## Tree-specific regime models
+  fits$BMS <- OUwie(
+    tree_list[[simmap_tree_index]],
+    ouwie_df,
+    model = "BMS",
+    simmap.tree = TRUE,
+    root.station = FALSE
+  )
+
+  fits$OUM <- OUwie(
+    tree_list[[simmap_tree_index]],
+    ouwie_df,
+    model = "OUM",
+    simmap.tree = TRUE,
+    root.station = FALSE
+  )
+
+  fits$OUMV <- OUwie(
+    tree_list[[simmap_tree_index]],
+    ouwie_df,
+    model = "OUMV",
+    simmap.tree = TRUE,
+    root.station = FALSE
+  )
+
+  fits$OUMA <- OUwie(
+    tree_list[[simmap_tree_index]],
+    ouwie_df,
+    model = "OUMA",
+    simmap.tree = TRUE,
+    root.station = FALSE
+  )
+
+  fits$OUMVA <- OUwie(
+    tree_list[[simmap_tree_index]],
+    ouwie_df,
+    model = "OUMVA",
+    simmap.tree = TRUE,
+    root.station = FALSE
+  )
+
+  ## Append AICs
+  aic_values <- c(
+    aic_values,
+    BMS   = fits$BMS$AIC,
+    OUM   = fits$OUM$AIC,
+    OUMV  = fits$OUMV$AIC,
+    OUMA  = fits$OUMA$AIC,
+    OUMVA = fits$OUMVA$AIC
+  )
+
+  list(
+    tree_index = simmap_tree_index,
+    aic_values = aic_values,
+    fits = fits
+  )
+}
+```
+
+```{r Fit OUwie Models to Total Count Data}
+set.seed(1931)
+random_tree_indices <- sample(
+  length(all_species_riverine_lacustrine_simmap),
+  100
+)
+
+#fit all models (BM, OU, OUM, OUMA, OUMV, OUMVA, BMS) to first tree
+#common_fits <- fit_multiple_regime_models(
+#  tree_list        = all_species_riverine_lacustrine_simmap,
+#  species_data     = all_species_riverine_lacustrine,
+#  matrix_data      = all_species_riverine_lacustrine_matrix,
+#  simmap_tree_index = random_tree_indices[1],
+#  fit_common_models = TRUE
+#)
+#saveRDS(common_fits, "Data/riverine_lacustrine_ouwie_common_models.rds")
+
+#common_fits
+
+
+#fit other models (OUM, OUMA, OUMV, OUMVA, BMS) in parallel for all other trees
+#plan(multisession, workers = 10)
+
+#results <- future_lapply(random_tree_indices, function(i) {
+
+ # res <- fit_multiple_regime_models(
+ #   tree_list         = all_species_riverine_lacustrine_simmap,
+ #   species_data      = all_species_riverine_lacustrine,
+ #   matrix_data       = all_species_riverine_lacustrine_matrix,
+ #  simmap_tree_index = i,
+ #   fit_common_models = FALSE
+ # )
+
+  #save per-tree
+ # saveRDS(res, paste0("Data/ouwie_per_tree/riverine_lacustrine_ouwie_tree_", i, ".rds"))
+#})
+```
+
+```{r Importing OUwie Results}
+
+dir_path <- "Data/ouwie_per_tree/"
+
+# list all riverine_lacustrine OUwie files
+file_paths <- list.files(
+  dir_path,
+  pattern = "^riverine_lacustrine_ouwie_tree_[0-9]+\\.rds$",
+  full.names = TRUE
+)
+
+# extract tree indices from filenames
+tree_indices <- as.integer(
+  sub(".*riverine_lacustrine_ouwie_tree_([0-9]+)\\.rds$", "\\1", file_paths)
+)
+
+# read files into a named list
+ouwie_results_riverine_lacustrine <- setNames(
+  lapply(file_paths, readRDS),
+  tree_indices
+)
+
+#import models fit to the first tree (132), this includes the BM and OU1 model fits
+common_models <-
+  readRDS("Data/riverine_lacustrine_ouwie_common_models.rds")
+
+#replace index 132 with the common models fit (which includes the BM and OU1 model fits)
+stopifnot("132" %in% names(ouwie_results_riverine_lacustrine))
+ouwie_results_riverine_lacustrine[["132"]] <- common_models
+
+#replace whole index and switch to 1-100 for ease
+names(ouwie_results_riverine_lacustrine) <- seq_along(ouwie_results_riverine_lacustrine)
+```
+
+```{r Extracting AICc Results}
+
+models <- c('BM1', 'OU1', 'BMS', 'OUM', 'OUMV', 'OUMA', 'OUMVA')
+
+ouwie_results_riverine_lacustrine_aicc <- do.call(
+  rbind,
+  lapply(seq_along(ouwie_results_riverine_lacustrine), function(i) {
+
+    x <- ouwie_results_riverine_lacustrine[[i]]$fits
+
+    # extract AICc for each model; use NA if a model wasn't run
+    out <- sapply(models, function(m) {
+      if (!is.null(x[[m]])) x[[m]]$AICc else NA_real_
+    })
+
+    data.frame(
+      tree  = rep(i, length(models)),
+      model = models,
+      AICc  = unname(out),
+      row.names = NULL
+    )
+  })
+)
+
+
+ouwie_results_riverine_lacustrine_aicc
+```
+
+```{r PLotting AICc Values}
+#full (i.e. including saddlepoint fits)
+ggplot(ouwie_results_riverine_lacustrine_aicc, aes(x=model, y=AICc))+
+  geom_boxplot(outlier.shape = NA)+
+  geom_jitter()+ 
+  theme_classic() #OUMA has some saddle fits... filter below -5000
+
+#short cutting off bad fits
+ggplot(ouwie_results_riverine_lacustrine_aicc, aes(x=model, y=AICc))+
+  geom_boxplot(outlier.shape = NA)+
+  geom_jitter()+
+  ylim(-1150, -1000)+ 
+  theme_classic() #looks like OUMV is the best fit overall (i.e. central tendency, some OUMVA fits are better but very few)
+```
+
+```{r Export Filtered AICc for AICc Weights}
+
+ouwie_results_riverine_lacustrine_aicc$regime <- 'riverine_lacustrine'
+
+#filter out really bad fits (i.e. saddlepoints, probably)
+ouwie_results_riverine_lacustrine_aicc <-
+  ouwie_results_riverine_lacustrine_aicc %>%
+  filter(AICc >= -5000, na.rm = TRUE)
+  
+write.csv(ouwie_results_riverine_lacustrine_aicc, "Data/ouwie_results_riverine_lacustrine_aicc.csv")
+```
+
+```{r Extracting AICc Results}
+
+summary_aicc_riverine_lacustrine <- ouwie_results_riverine_lacustrine_aicc %>%
+  group_by(model) %>%
+  summarise(
+    removed = sum(AICc <= -5000, na.rm = TRUE),
+    median   = median(AICc[AICc > -5000], na.rm = TRUE)
+  )
+
+summary_aicc_riverine_lacustrine #OUMV is the best fit overall
+```
+
+```{r Extracting OUMV Parameters}
+
+regimes <- c("Lacustrine", "Riverine")
+
+#identify trees with good OUMV fits (all are good, so not really needed but good)
+good_trees <- sapply(ouwie_results_riverine_lacustrine, function(x) {
+  aicc <- x$fits$OUMV$AICc
+  !is.null(aicc) && aicc > -5000   # keep only trees with AICc > -5000
+})
+
+#extract parameters
+param_summary <- do.call(
+  rbind,
+  lapply(seq_along(ouwie_results_riverine_lacustrine), function(i) {
+
+    # skip bad trees
+    if (!good_trees[i]) return(NULL)
+
+    x <- ouwie_results_riverine_lacustrine[[i]]$fits$OUMV
+
+    alpha_vals <- x$solution[1, ]
+
+    data.frame(
+      tree       = i,
+      regime     = regimes,
+      alpha      = alpha_vals,
+      sigma2     = x$solution[2, ],
+      theta      = x$theta[1:2],
+      theta_se   = x$theta[,2],
+      t_half     = log(2) / alpha_vals,
+      row.names  = NULL
+    )
+  })
+)
+
+param_summary
+```
+
+```{r Summarise the Parameter Values}
+
+median_range_parameters <- 
+  param_summary %>%
+  group_by(regime) %>%
+  summarise(
+    median_alpha = median(alpha),
+    min_alpha = min(alpha),
+    max_alpha = max(alpha),
+    median_sigma2 = median(sigma2),
+    min_sigma2 = min(sigma2),
+    max_sigma2 = max(sigma2),
+    median_theta = median(theta),
+    min_theta = min(theta),
+    max_theta = max(theta),
+    median_theta_se = median(theta_se),
+    min_theta_se = min(theta_se),
+    max_theta_se = max(theta_se),
+    median_half_life = median(t_half),
+    min_half_life = min(t_half),
+    max_half_life = max(t_half)
+  )
+
+
+write.csv(median_range_parameters, 'median_range_parameters_OUMV_riverine_lacustrine.csv')
+```

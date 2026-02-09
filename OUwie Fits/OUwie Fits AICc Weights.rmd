@@ -1,0 +1,99 @@
+---
+title: "OUwie Fits AICc Weights"
+author: "Callum Bucklow"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r Setup, include=FALSE}
+knitr::opts_chunk$set(message = FALSE) ##Remove messages for all chunks
+knitr::opts_chunk$set(warning = FALSE) ##Remove warnings for all chunks
+```
+
+```{r Libraries}
+# Load the necessary libraries
+#library(tidyverse) #data wrangling
+library(tidyr) #data wrangling
+library(dplyr)
+library(ggplot2) #for plotting when I don't want to use Base R
+library(gridExtra) #for ggplot, to plot multiple plots together
+library(fitdistrplus) #for fitting distributions to data
+library(ape) #for phylogeny manipulation and all the rest
+library(phytools) #for various things, including phylogenetic PCA, PGLM etc.
+library(nlme) #for pgls
+library(geiger) #for fitting trait evolution models to phylogenies
+library(OUwie) #for fitting multiple regime OU models to trait evolution models
+library(caper) #for pgls and will report pseudo-r2 for these models
+library(parallel)
+library(future.apply)
+```
+
+```{r Import AICc Values for Each Regime}
+
+regimes <- c("depth", "water_system", "piscivore",
+             "riverine_lacustrine", "tribe")
+
+all_aicc_results <- do.call(
+  rbind,
+  lapply(regimes, function(r) {
+    read.csv(paste0('Data/ouwie_results_', r, '_aicc.csv'))
+  })
+)
+
+all_aicc_results$X <- NULL
+```
+
+```{r}
+
+#extract the common BM1 and OU1 fits (only fit to one single tree per regime)
+bm_ou_ref <- all_aicc_results %>%
+  filter(tree == 5, model %in% c("BM1", "OU1"))
+
+#all trees present in your study
+trees <- sort(unique(all_aicc_results$tree))
+
+#replicate BM1/OU1 across all trees
+bm_ou_all <- bm_ou_ref %>%
+  dplyr::select(-tree) %>%            #drop the existing tree column
+  crossing(tree = trees) %>%          #replicate for all trees
+  dplyr::select(tree, model, AICc, regime) %>% 
+  arrange(tree, regime, model)
+
+# remove original BM1/OU1 from main results
+all_aicc_results_clean <- all_aicc_results %>%
+  filter(!model %in% c("BM1", "OU1"))
+
+# combine with replicated BM1/OU1
+all_aicc_results_complete <- bind_rows(
+  all_aicc_results_clean,
+  bm_ou_all
+)
+```
+
+```{r}
+
+#i.e. a relative global comparison
+aicc_weights_per_tree <- all_aicc_results_complete %>%
+  group_by(tree) %>%  # compute within each tree
+  mutate(
+    delta_AICc = AICc - min(AICc),          #dAICc relative to best model on that tree
+    weight = exp(-0.5 * delta_AICc) / sum(exp(-0.5 * delta_AICc))
+  ) %>%
+  ungroup()
+
+aicc_weights_relative <- aicc_weights_per_tree %>%
+  group_by(model, regime) %>%
+  summarize(
+    median_weight = median(weight),
+    min_weight = min(weight),
+    max_weight = max(weight),
+    .groups = 'drop'
+  )
+
+aicc_weights_relative
+
+#export to desktop because I am so very tired
+write.csv(aicc_weights_relative, "~/Desktop/aicc_weights_relative.csv")
+
+
+```

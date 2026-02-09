@@ -1,0 +1,438 @@
+---
+title: Fit Multiple OU Models to Discrete Mapping Data using OUwie (Piscivore versus
+  Non-piscivore)
+author: "Callum Bucklow"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r Setup, include=FALSE}
+knitr::opts_chunk$set(message = FALSE) ##Remove messages for all chunks
+knitr::opts_chunk$set(warning = FALSE) ##Remove warnings for all chunks
+```
+
+```{r Libraries}
+# Load the necessary libraries
+# library(tidyverse) #data wrangling
+library(tidyr) #data wrangling
+library(dplyr)
+library(ggplot2) #for plotting when I don't want to use Base R
+library(gridExtra) #for ggplot, to plot multiple plots together
+library(fitdistrplus) #for fitting distributions to data
+library(ape) #for phylogeny manipulation and all the rest
+library(phytools) #for various things, including phylogenetic PCA, PGLM etc.
+library(nlme) #for pgls
+library(geiger) #for fitting trait evolution models to phylogenies
+library(OUwie) #for fitting multiple regime OU models to trait evolution models
+library(caper) #for pgls and will report pseudo-r2 for these models
+library(future.apply)
+```
+
+# Fitting Multiple OU Models to Water System Simmap
+
+```{r Import Water System Simmap}
+all_species_piscivore_simmap <- readRDS('Data/all_species_piscivore_simmap.rds')
+```
+
+```{r Prepare All Species Data with their Water System Occupancy}
+#remember we are using the tree that has been pruned to those for which we know whether they are piscivorous or not
+
+#import qualitative data
+all_species_stored_data_piscivore <-
+  read.csv('Data/all_species_stored_data_piscivore.csv')
+
+#import quant data
+all_species_matrix_data_piscivore <-  read.csv('Data/all_species_matrix_data_piscivore.csv')
+
+#import piscivore pruned tree:
+all_species_tree_piscivore_pruned <- read.tree('Data/all_species_tree_piscivore_pruned.txt')
+
+#save edge lengths
+all_species_piscivore_pruned_edges <- all_species_tree_piscivore_pruned$edge.length
+
+#create trait variable for fitting discrete models:
+all_species_piscivore <- all_species_stored_data_piscivore$piscivore
+names(all_species_piscivore) <- all_species_stored_data_piscivore$species_name
+
+#convert matrix into dataframe
+all_species_matrix_data_df <- as.data.frame(all_species_matrix_data_piscivore)
+
+#isolate quantitative data
+all_species_piscivore_matrix <- 
+  all_species_matrix_data_df %>%
+  filter(names(all_species_piscivore) %in% all_species_matrix_data_df$X)
+```
+
+```{r Define function to fit OUwie Models}
+
+fit_multiple_regime_models <- function(
+  tree_list,
+  species_data,
+  matrix_data,
+  simmap_tree_index,
+  fit_common_models = FALSE
+) {
+  ## Prepare OUwie dataframe
+  ouwie_df <- data.frame(
+    species_name = names(species_data),
+    variable = as.numeric(species_data),
+    tc = as.numeric(matrix_data[, 4])
+  )
+
+  fits <- list()
+  aic_values <- c()
+
+  ## Fit common models only once
+  if (fit_common_models) {
+    fits$BM1 <- OUwie(
+      tree_list[[simmap_tree_index]],
+      ouwie_df,
+      model = "BM1",
+      simmap.tree = TRUE
+    )
+
+    fits$OU1 <- OUwie(
+      tree_list[[simmap_tree_index]],
+      ouwie_df,
+      model = "OU1",
+      simmap.tree = TRUE,
+      root.station = FALSE
+    )
+
+    aic_values <- c(
+      BM1 = fits$BM1$AIC,
+      OU1 = fits$OU1$AIC
+    )
+  } else {
+    aic_values <- c(
+      BM1 = NA,
+      OU1 = NA
+    )
+  }
+
+  ## Tree-specific regime models
+  fits$BMS <- OUwie(
+    tree_list[[simmap_tree_index]],
+    ouwie_df,
+    model = "BMS",
+    simmap.tree = TRUE,
+    root.station = FALSE
+  )
+
+  fits$OUM <- OUwie(
+    tree_list[[simmap_tree_index]],
+    ouwie_df,
+    model = "OUM",
+    simmap.tree = TRUE,
+    root.station = FALSE
+  )
+
+  fits$OUMV <- OUwie(
+    tree_list[[simmap_tree_index]],
+    ouwie_df,
+    model = "OUMV",
+    simmap.tree = TRUE,
+    root.station = FALSE
+  )
+
+  fits$OUMA <- OUwie(
+    tree_list[[simmap_tree_index]],
+    ouwie_df,
+    model = "OUMA",
+    simmap.tree = TRUE,
+    root.station = FALSE
+  )
+
+  fits$OUMVA <- OUwie(
+    tree_list[[simmap_tree_index]],
+    ouwie_df,
+    model = "OUMVA",
+    simmap.tree = TRUE,
+    root.station = FALSE
+  ) 
+
+  ## Append AICs
+  aic_values <- c(
+    aic_values,
+    BMS   = fits$BMS$AIC,
+    OUM   = fits$OUM$AIC,
+    OUMV  = fits$OUMV$AIC,
+    OUMA  = fits$OUMA$AIC,
+    OUMVA = fits$OUMVA$AIC
+  )
+
+  list(
+    tree_index = simmap_tree_index,
+    aic_values = aic_values,
+    fits = fits
+  )
+}
+```
+
+```{r Fit OUwie Models to Total Count Data}
+set.seed(1931)
+random_tree_indices <- sample(
+  length(all_species_piscivore_simmap),
+  100
+)
+
+#fit all models (BM, OU, OUM, OUMA, OUMV, OUMVA, BMS) to first tree
+#common_fits <- fit_multiple_regime_models(
+#  tree_list        = all_species_piscivore_simmap,
+#  species_data     = all_species_piscivore,
+#  matrix_data      = all_species_piscivore_matrix,
+#  simmap_tree_index = random_tree_indices[1],
+#  fit_common_models = TRUE
+#)
+#saveRDS(common_fits, "Data/piscivore_ouwie_common_models.rds")
+
+#fit other models (OUM, OUMA, OUMV, OUMVA, BMS) in parallel for all other trees
+#plan(multisession, workers = 20)
+
+#results <- future_lapply(random_tree_indices, function(i) {
+
+ # res <- fit_multiple_regime_models(
+ #    tree_list         = all_species_piscivore_simmap,
+ #  species_data      = all_species_piscivore,
+ #  matrix_data       = all_species_piscivore_matrix,
+  #  simmap_tree_index = i,
+   # fit_common_models = FALSE
+  #)
+
+  #save per-tree
+  #saveRDS(res, paste0("Data/ouwie_per_tree/piscivore_ouwie_tree_", i, ".rds"))
+#})
+```
+
+```{r Importing OUwie Results}
+
+dir_path <- "Data/ouwie_per_tree/"
+
+# list all piscivore OUwie files
+file_paths <- list.files(
+  dir_path,
+  pattern = "^piscivore_ouwie_tree_[0-9]+\\.rds$",
+  full.names = TRUE
+)
+
+# extract tree indices from filenames
+tree_indices <- as.integer(
+  sub(".*piscivore_ouwie_tree_([0-9]+)\\.rds$", "\\1", file_paths)
+)
+
+# read files into a named list
+ouwie_results_piscivore <- setNames(
+  lapply(file_paths, readRDS),
+  tree_indices
+)
+
+#import models fit to the first tree (132), this includes the BM and OU1 model fits
+common_models <-
+  readRDS("Data/piscivore_ouwie_common_models.rds")
+
+#replace index 132 with the common models fit (which includes the BM and OU1 model fits)
+stopifnot("132" %in% names(ouwie_results_piscivore))
+ouwie_results_piscivore[["132"]] <- common_models
+
+#replace whole index and switch to 1-100 for ease
+names(ouwie_results_piscivore) <- seq_along(ouwie_results_piscivore)
+```
+
+```{r Extracting AICc Results}
+
+models <- c('BM1', 'OU1', 'BMS', 'OUM', 'OUMV', 'OUMA', 'OUMVA')
+
+ouwie_results_piscivore_aicc <- do.call(
+  rbind,
+  lapply(seq_along(ouwie_results_piscivore), function(i) {
+
+    x <- ouwie_results_piscivore[[i]]$fits
+
+    # extract AICc for each model; use NA if a model wasn't run
+    out <- sapply(models, function(m) {
+      if (!is.null(x[[m]])) x[[m]]$AICc else NA_real_
+    })
+
+    data.frame(
+      tree  = rep(i, length(models)),
+      model = models,
+      AICc  = unname(out),
+      row.names = NULL
+    )
+  })
+)
+
+```
+
+```{r PLotting AICc Values}
+#full (i.e. including saddlepoint fits)
+ggplot(ouwie_results_piscivore_aicc, aes(x=model, y=AICc))+
+  geom_boxplot(outlier.shape = NA)+
+  geom_jitter()+
+  theme_classic() #filter out model fits less than 1500 AICc (clearly not good fits)
+
+#short cutting off bad fits
+ggplot(ouwie_results_piscivore_aicc, aes(x=model, y=AICc))+
+  geom_boxplot(outlier.shape = NA)+
+  geom_jitter()+
+  ylim(-1000, -900)+ 
+  theme_classic() #looks like OUM and OUMV might be similarly fitting. 
+```
+
+```{r Export Filtered AICc for AICc Weights}
+
+ouwie_results_piscivore_aicc$regime <- 'piscivore'
+
+#filter out really bad fits (i.e. saddlepoints, probably)
+ouwie_results_piscivore_aicc <-
+  ouwie_results_piscivore_aicc %>%
+  filter(AICc >= -1500, na.rm = TRUE)
+  
+write.csv(ouwie_results_piscivore_aicc, "Data/ouwie_results_piscivore_aicc.csv")
+```
+
+```{r Extracting AICc Results}
+
+summary_aicc_piscivore <- ouwie_results_piscivore_aicc %>%
+  group_by(model) %>%
+  summarise(
+    removed = sum(AICc <= -1500, na.rm = TRUE),
+    median   = median(AICc[AICc > -1500], na.rm = TRUE)
+  )
+
+summary_aicc_piscivore #looks like OUMA and OUMV are indistinguishable dAICc is basically 0
+```
+
+```{r Extracting OUM Parameters}
+
+regimes <- c("non-piscivore", "piscivore")
+
+#identify trees with good OUMA fits, filtering out saddlepoint fits (as per above)
+good_trees <- sapply(ouwie_results_piscivore, function(x) {
+  aicc <- x$fits$OUM$AICc
+  !is.null(aicc) && aicc > -1500   # keep only trees with AICc > -1500
+})
+
+#extract parameters
+param_summary_OUM <- do.call(
+  rbind,
+  lapply(seq_along(ouwie_results_piscivore), function(i) {
+
+    # skip bad trees
+    if (!good_trees[i]) return(NULL)
+
+    x <- ouwie_results_piscivore[[i]]$fits$OUM
+
+    alpha_vals <- x$solution[1, ]
+
+    data.frame(
+      tree       = i,
+      regime     = regimes,
+      alpha      = alpha_vals,
+      sigma2     = x$solution[2, ],
+      theta      = x$theta[1:2],
+      theta_se   = x$theta[,2],
+      t_half     = log(2) / alpha_vals,
+      row.names  = NULL
+    )
+  })
+)
+
+param_summary_OUM
+```
+
+```{r Summarise the Parameter Values}
+
+median_range_parameters_OUM <- 
+  param_summary_OUM %>%
+  group_by(regime) %>%
+  summarise(
+    median_alpha = median(alpha),
+    min_alpha = min(alpha),
+    max_alpha = max(alpha),
+    median_sigma2 = median(sigma2),
+    min_sigma2 = min(sigma2),
+    max_sigma2 = max(sigma2),
+    median_theta = median(theta),
+    min_theta = min(theta),
+    max_theta = max(theta),
+    median_theta_se = median(theta_se),
+    min_theta_se = min(theta_se),
+    max_theta_se = max(theta_se),
+    median_half_life = median(t_half),
+    min_half_life = min(t_half),
+    max_half_life = max(t_half)
+  )
+
+median_range_parameters_OUM
+
+write.csv(median_range_parameters_OUM, 'median_range_parameters_OUM_piscivore.csv')
+
+```
+
+```{r Extracting OUMV Parameters}
+
+regimes <- c("non-piscivore", "piscivore")
+
+#identify trees with good OUMA fits, filtering out saddlepoint fits (as per above)
+good_trees <- sapply(ouwie_results_piscivore, function(x) {
+  aicc <- x$fits$OUMV$AICc
+  !is.null(aicc) && aicc > -1500   # keep only trees with AICc > -1500
+})
+
+#extract parameters
+param_summary_OUMV <- do.call(
+  rbind,
+  lapply(seq_along(ouwie_results_piscivore), function(i) {
+
+    # skip bad trees
+    if (!good_trees[i]) return(NULL)
+
+    x <- ouwie_results_piscivore[[i]]$fits$OUMV
+
+    alpha_vals <- x$solution[1, ]
+
+    data.frame(
+      tree       = i,
+      regime     = regimes,
+      alpha      = alpha_vals,
+      sigma2     = x$solution[2, ],
+      theta      = x$theta[1:2],
+      theta_se   = x$theta[,2],
+      t_half     = log(2) / alpha_vals,
+      row.names  = NULL
+    )
+  })
+)
+
+param_summary_OUMV
+```
+
+```{r Summarise the Parameter Values}
+
+median_range_parameters_OUMV <- 
+  param_summary_OUMV %>%
+  group_by(regime) %>%
+  summarise(
+    median_alpha = median(alpha),
+    min_alpha = min(alpha),
+    max_alpha = max(alpha),
+    median_sigma2 = median(sigma2),
+    min_sigma2 = min(sigma2),
+    max_sigma2 = max(sigma2),
+    median_theta = median(theta),
+    min_theta = min(theta),
+    max_theta = max(theta),
+    median_theta_se = median(theta_se),
+    min_theta_se = min(theta_se),
+    max_theta_se = max(theta_se),
+    median_half_life = median(t_half),
+    min_half_life = min(t_half),
+    max_half_life = max(t_half)
+  )
+
+median_range_parameters_OUMV
+
+write.csv(median_range_parameters_OUMV, 'median_range_parameters_OUMV_piscivore.csv')
+
+```
