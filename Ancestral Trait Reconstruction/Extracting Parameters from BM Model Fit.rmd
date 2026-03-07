@@ -25,13 +25,15 @@ require(stringr)
 require(viridis)
 ```
 
+# Total Vertebral Count
+
 ```{r Import ln[Total Count] Model Parameters}
 
 #define seed values used in the model fitting (part of filename)
 seed_values <- c(1931, 1971, 1970, 1996, 2016)
 
 #access the file paths
-file_paths <- paste0("ln[TC]/ln_tc_", 1:5, "_mcmc_2e+6_BM_output_", seed_values, "_model_params.txt")
+file_paths <- paste0("Node and Parameter Estimates/ln[TC]/ln_tc_", 1:5, "_mcmc_2e+6_BM_output_", seed_values, "_model_params.txt")
 
 #start empty list
 ln_tc_params_list <- list()
@@ -41,7 +43,7 @@ for (i in seq_along(file_paths)) {
   
   data <- read.table(file_paths[i], header = TRUE)
   
-  #remoe burnin
+  #remove burnin
   rows_to_remove <- floor(0.1 * nrow(data))
   
   #remove rows which correspond to burnin
@@ -83,7 +85,7 @@ ggplot(ln_tc_params_combined, aes(x=sigmasq))+
 
 ln_tc_params_summary #3.342846 [3.339193:3.346499]
 
-# 95% CI 28.29955 [28.19636, 28.40312]
+#95% CI 28.29955 [28.19636, 28.40312]
 
 
 ```
@@ -94,7 +96,7 @@ ln_tc_params_summary #3.342846 [3.339193:3.346499]
 seed_values <- c(1931, 1971, 1970, 1996, 2016)
 
 #access the file paths
-file_paths <- paste0("ln[TC]/ln_tc_", 1:5, "_mcmc_2e+6_BM_output_", seed_values, "_nodestates.txt")
+file_paths <- paste0("Node and Parameter Estimates/ln[TC]/ln_tc_", 1:5, "_mcmc_2e+6_BM_output_", seed_values, "_nodestates.txt")
 
 #start empty list
 ln_tc_params_list <- list()
@@ -124,7 +126,7 @@ ln_tc_nodestates_combined
 #define seed values used in the model fitting (part of filename)
 seed_values <- c(1931, 1971, 1970, 1996, 2016)
 
-files_tc <- paste0("ln[TC]/ln_tc_", 1:5, "_mcmc_2e+6_BM_output_", seed_values, "_nodestates.txt")
+files_tc <- paste0("Node and Parameter Estimates/ln[TC]/ln_tc_", 1:5, "_mcmc_2e+6_BM_output_", seed_values, "_nodestates.txt")
 
 # Read all files into a list
 ln.tc.node.states <- lapply(files_tc, read.table, header = TRUE)
@@ -176,13 +178,13 @@ ancestral_nodes <- as.matrix(ln.tc.node.states.combined.long.summary$mean)
 rownames(ancestral_nodes) <- as.numeric(ln.tc.node.states.combined.long.summary$node)
 
 #import tree:
-all_species_tree <- read.tree("all_species_tree_piscivore_pruned.txt")
+all_species_tree <- read.tree("Species Tree and Data/all_species_tree_piscivore_pruned.txt")
 
 #substitue _ for space in tip labels:
 all_species_tree$tip.label <- gsub("_", " ", all_species_tree$tip.label)
 
 #import total_count data
-all_species_total_count <- read.csv("all_species_matrix_data_piscivore.csv")
+all_species_total_count <- read.csv("Species Tree and Data/all_species_matrix_data.csv")
 
 #create matrix:
 species_matrix <- as.matrix(all_species_total_count$total_count)
@@ -199,7 +201,7 @@ set.seed(1931)
 contmap_tc <- 
   setMap(contmap_tc, c(plasma(4)))
 
-svg("contmap_tc_all_species_MCMC.svg", width=8.4, height=11)
+pdf("contmap_tc_all_species_MCMC.pdf", width=8.4, height=11)
 
 #plot the contmap:
 plot(contmap_tc,
@@ -213,12 +215,10 @@ add.color.bar(10, contmap_tc$cols,title="ln[TC]",
     lims=contmap_tc$lims,digits=2,prompt=FALSE,x=-0.25,
     y=5,lwd=5,fsize=0.50,subtitle="10 myrs")
 
-#nodelabels(cex=0.25,  frame = "none")
+nodelabels(cex=0.25,  frame = "none")
 
 dev.off()
 ```
-
-
 
 ```{r Compute Node Ages from Tree}
 #compute node ages from the root
@@ -257,13 +257,15 @@ help <- test <- all_species_total_count %>%
 help
 ```
 
+# Precaudal-Caudal Ratio
+
 ```{r Import ln[PC] - ln[C] Model Parameters}
 
 #define seed values used in the model fitting (part of filename)
 seed_values <- c(1931, 1971, 1970, 1996, 2016)
 
 #access the file paths
-file_paths <- paste0("ln[PC]-ln[C]/ln_pc_ln_c_", 1:5, "_mcmc_2e+6_BM_output_", seed_values, "_model_params.txt")
+file_paths <- paste0("Node and Parameter Estimates/ln[PC]-ln[C]/ln_pc_ln_c_", 1:5, "_mcmc_2e+6_BM_output_", seed_values, "_model_params.txt")
 
 #start empty list
 ln_pc_ln_c_params_list <- list()
@@ -302,13 +304,66 @@ ln_pc_ln_c_params_summary <-
 ln_pc_ln_c_params_summary #-0.09061365 95% CI [-0.09560744, -0.08561986	]
 ```
 
+```{r Importing Node State Estimates for ln[PC]-ln[C]}
+
+#define seed values used in the model fitting (part of filename)
+seed_values <- c(1931, 1971, 1970, 1996, 2016)
+
+files_tc <- paste0("Node and Parameter Estimates/ln[PC]-ln[C]/ln_pc_ln_c_", 1:5, "_mcmc_2e+6_BM_output_", seed_values, "_nodestates.txt")
+
+# Read all files into a list
+ln.pc.ln.c.node.states <- lapply(files_tc, read.table, header = TRUE)
+
+# If you want to assign each dataframe to its own variable, you can do so like this:
+names(ln.pc.ln.c.node.states) <- paste0("ln.pc.ln.c.node.states.", 1:5, ".param")
+list2env(ln.pc.ln.c.node.states, envir = .GlobalEnv)
+
+#filter first 10% of estimated node states which corresponds to burnin 
+ln.pc.ln.c.node.states.burnin.filtered <- lapply(ln.pc.ln.c.node.states, function(df) {
+  df %>% filter(row_number() > 0.1 * n())
+})
+
+#combine into single list by column (which represents each node)
+ln.pc.ln.c.node.states.combined.cols <- bind_rows(ln.pc.ln.c.node.states.burnin.filtered)
+```
+
+```{r Calculate Mean and 95 CI for each node}
+# Convert to long format
+ln.pc.ln.c.node.states.combined.long <- ln.pc.ln.c.node.states.combined.cols %>%
+  pivot_longer(
+    cols = everything(),
+    names_to = "node",
+    values_to = "estimate"
+  )
+
+#calculate mean, sd and CI for each node
+ln.pc.ln.c.node.states.combined.long.summary <- 
+  ln.pc.ln.c.node.states.combined.long%>%
+  group_by(node) %>%
+  summarise(
+    mean = mean(estimate, na.rm = TRUE),
+    median = median(estimate, na.rm = TRUE),
+    sd = sd(estimate, na.rm = TRUE),
+    n = n(),
+    CI_upper = mean + 1.96 * (sd / sqrt(n)),
+    CI_lower = mean - 1.96 * (sd / sqrt(n))
+    )
+
+ln.pc.ln.c.node.states.combined.long.summary$node <- gsub("^X", "", ln.pc.ln.c.node.states.combined.long.summary$node)
+
+#write to csv file and save
+write.csv(ln.pc.ln.c.node.states.combined.long.summary, "ln_pc_ln_c_node_estimates_mcmc.csv")
+```
+
+# Whole Body Elongation
+
 ```{r Import ln[Length] - ln[Width] Model Parameters}
 
 #define seed values used in the model fitting (part of filename)
 seed_values <- c(1931, 1971, 1970, 1996, 2016)
 
 #access the file paths
-file_paths <- paste0("ln[Length]-ln[Width]/ln_length_ln_width_", 1:5, "_mcmc_2e+6_BM_output_", seed_values, "_model_params.txt")
+file_paths <- paste0("Node and Parameter Estimates/ln[Length]-ln[Width]/ln_length_ln_width_", 1:5, "_mcmc_2e+6_BM_output_", seed_values, "_model_params.txt")
 
 #start empty list
 ln_length_ln_width_params_list <- list()
@@ -347,13 +402,66 @@ ln_length_ln_width_params_summary <-
 ln_length_ln_width_params_summary #0.9857241 95% CI [0.9719494, 0.9994989]
 ```
 
+```{r Importing Node State Estimates for ln[Length]-ln[Width]}
+
+#define seed values used in the model fitting (part of filename)
+seed_values <- c(1931, 1971, 1970, 1996, 2016)
+
+files_ln_l_ln_w <- paste0("Node and Parameter Estimates/ln[Length]-ln[Width]/ln_length_ln_width_", 1:5, "_mcmc_2e+6_BM_output_", seed_values, "_nodestates.txt")
+
+# Read all files into a list
+ln.length.ln.width.node.states <- lapply(files_ln_l_ln_w, read.table, header = TRUE)
+
+# If you want to assign each dataframe to its own variable, you can do so like this:
+names(ln.length.ln.width.node.states) <- paste0("ln.length.ln.width.node.states.", 1:5, ".param")
+list2env(ln.length.ln.width.node.states, envir = .GlobalEnv)
+
+#filter first 10% of estimated node states which corresponds to burnin 
+ln.length.ln.width.node.states.burnin.filtered <- lapply(ln.length.ln.width.node.states, function(df) {
+  df %>% filter(row_number() > 0.1 * n())
+})
+
+#combine into single list by column (which represents each node)
+ln.length.ln.width.node.states.combined.cols <- bind_rows(ln.length.ln.width.node.states.burnin.filtered)
+```
+
+```{r Calculate Mean and 95 CI for each node}
+# Convert to long format
+ln.length.ln.width.node.states.combined.long <- ln.length.ln.width.node.states.combined.cols %>%
+  pivot_longer(
+    cols = everything(),
+    names_to = "node",
+    values_to = "estimate"
+  )
+
+#calculate mean, sd and CI for each node
+ln.length.ln.width.node.states.combined.long.summary <- 
+  ln.length.ln.width.node.states.combined.long%>%
+  group_by(node) %>%
+  summarise(
+    mean = mean(estimate, na.rm = TRUE),
+    median = median(estimate, na.rm = TRUE),
+    sd = sd(estimate, na.rm = TRUE),
+    n = n(),
+    CI_upper = mean + 1.96 * (sd / sqrt(n)),
+    CI_lower = mean - 1.96 * (sd / sqrt(n))
+    )
+
+ln.length.ln.width.node.states.combined.long.summary$node <- gsub("^X", "", ln.length.ln.width.node.states.combined.long.summary$node)
+
+#write to csv file and save
+write.csv(ln.length.ln.width.node.states.combined.long.summary, "ln_length_ln_depth_node_estimates_mcmc.csv")
+```
+
+# Cranial/Anterior Elongation
+
 ```{r Import ln[Anterior Length] - ln[Width] Model Parameters}
 
 #define seed values used in the model fitting (part of filename)
 seed_values <- c(1931, 1971, 1970, 1996, 2016)
 
 #access the file paths
-file_paths <- paste0("ln[Anterior]-ln[Width]/ln_ant_length_ln_width_", 1:5, "_mcmc_2e+6_BM_output_", seed_values, "_model_params.txt")
+file_paths <- paste0("Node and Parameter Estimates/ln[Anterior]-ln[Width]/ln_ant_length_ln_width_", 1:5, "_mcmc_2e+6_BM_output_", seed_values, "_model_params.txt")
 
 #start empty list
 ln_anterior_ln_width_params_list <- list()
@@ -392,13 +500,67 @@ ln_anterior_ln_width_params_summary <-
 ln_anterior_ln_width_params_summary
 ```
 
+```{r Importing Node State Estimates for ln[Anterior Length]-ln[Width]}
+
+#define seed values used in the model fitting (part of filename)
+seed_values <- c(1931, 1971, 1970, 1996, 2016)
+
+files_ln_ant_ln_w <- paste0("Node and Parameter Estimates/ln[Anterior]-ln[Width]/ln_ant_length_ln_width_", 1:5, "_mcmc_2e+6_BM_output_", seed_values, "_nodestates.txt")
+
+# Read all files into a list
+ln.ant.ln.width.node.states <- lapply(files_ln_ant_ln_w, read.table, header = TRUE)
+
+# If you want to assign each dataframe to its own variable, you can do so like this:
+names(ln.ant.ln.width.node.states) <- paste0("ln.ant.ln.width.node.states.", 1:5, ".param")
+list2env(ln.ant.ln.width.node.states, envir = .GlobalEnv)
+
+#filter first 10% of estimated node states which corresponds to burnin 
+ln.ant.ln.width.node.states.burnin.filtered <- lapply(ln.ant.ln.width.node.states, function(df) {
+  df %>% filter(row_number() > 0.1 * n())
+})
+
+#combine into single list by column (which represents each node)
+ln.ant.ln.width.node.states.combined.cols <- bind_rows(ln.ant.ln.width.node.states.burnin.filtered)
+```
+
+```{r Calculate Mean and 95 CI for each node}
+# Convert to long format
+ln.ant.ln.width.node.states.combined.long <- ln.ant.ln.width.node.states.combined.cols %>%
+  pivot_longer(
+    cols = everything(),
+    names_to = "node",
+    values_to = "estimate"
+  )
+
+#calculate mean, sd and CI for each node
+ln.ant.ln.width.node.states.combined.long.summary <- 
+  ln.ant.ln.width.node.states.combined.long%>%
+  group_by(node) %>%
+  summarise(
+    mean = mean(estimate, na.rm = TRUE),
+    median = median(estimate, na.rm = TRUE),
+    sd = sd(estimate, na.rm = TRUE),
+    n = n(),
+    CI_upper = mean + 1.96 * (sd / sqrt(n)),
+    CI_lower = mean - 1.96 * (sd / sqrt(n))
+    )
+
+ln.ant.ln.width.node.states.combined.long.summary$node <- gsub("^X", "", ln.ant.ln.width.node.states.combined.long.summary$node)
+
+#write to csv file and save
+write.csv(ln.ant.ln.width.node.states.combined.long.summary, "ln_ant_ln_depth_node_estimates_mcmc.csv")
+```
+
+
+# Postcranial (Posterior) Elongation
+
 ```{r Import ln[Posterior Length] - ln[Width] Model Parameters}
 
 #define seed values used in the model fitting (part of filename)
 seed_values <- c(1931, 1971, 1970, 1996, 2016)
 
 #access the file paths
-file_paths <- paste0("ln[posterior]-ln[Width]/ln_post_length_ln_width_", 1:5, "_mcmc_2e+6_BM_output_", seed_values, "_model_params.txt")
+file_paths <- paste0("Node and Parameter Estimates/ln[posterior]-ln[Width]/ln_post_length_ln_width_", 1:5, "_mcmc_2e+6_BM_output_", seed_values, "_model_params.txt")
 
 #start empty list
 ln_posterior_ln_width_params_list <- list()
@@ -436,4 +598,55 @@ ln_posterior_ln_width_params_summary <-
 
 ln_posterior_ln_width_params_summary 
 ```
+```{r Importing Node State Estimates for ln[Posterior Length]-ln[Width]}
+
+#define seed values used in the model fitting (part of filename)
+seed_values <- c(1931, 1971, 1970, 1996, 2016)
+
+files_ln_post_ln_w <- paste0("Node and Parameter Estimates/ln[Posterior]-ln[Width]/ln_post_length_ln_width_", 1:5, "_mcmc_2e+6_BM_output_", seed_values, "_nodestates.txt")
+
+# Read all files into a list
+ln.post.ln.width.node.states <- lapply(files_ln_post_ln_w, read.table, header = TRUE)
+
+# If you wpost to assign each dataframe to its own variable, you can do so like this:
+names(ln.post.ln.width.node.states) <- paste0("ln.post.ln.width.node.states.", 1:5, ".param")
+list2env(ln.post.ln.width.node.states, envir = .GlobalEnv)
+
+#filter first 10% of estimated node states which corresponds to burnin 
+ln.post.ln.width.node.states.burnin.filtered <- lapply(ln.post.ln.width.node.states, function(df) {
+  df %>% filter(row_number() > 0.1 * n())
+})
+
+#combine into single list by column (which represents each node)
+ln.post.ln.width.node.states.combined.cols <- bind_rows(ln.post.ln.width.node.states.burnin.filtered)
+```
+
+```{r Calculate Mean and 95 CI for each node}
+# Convert to long format
+ln.post.ln.width.node.states.combined.long <- ln.post.ln.width.node.states.combined.cols %>%
+  pivot_longer(
+    cols = everything(),
+    names_to = "node",
+    values_to = "estimate"
+  )
+
+#calculate mean, sd and CI for each node
+ln.post.ln.width.node.states.combined.long.summary <- 
+  ln.post.ln.width.node.states.combined.long%>%
+  group_by(node) %>%
+  summarise(
+    mean = mean(estimate, na.rm = TRUE),
+    median = median(estimate, na.rm = TRUE),
+    sd = sd(estimate, na.rm = TRUE),
+    n = n(),
+    CI_upper = mean + 1.96 * (sd / sqrt(n)),
+    CI_lower = mean - 1.96 * (sd / sqrt(n))
+    )
+
+ln.post.ln.width.node.states.combined.long.summary$node <- gsub("^X", "", ln.post.ln.width.node.states.combined.long.summary$node)
+
+#write to csv file and save
+write.csv(ln.post.ln.width.node.states.combined.long.summary, "ln_post_ln_depth_node_estimates_mcmc.csv")
+```
+
 
