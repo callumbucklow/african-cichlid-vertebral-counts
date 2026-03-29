@@ -32,6 +32,7 @@ library(viridis)
 library(geomorph) #for MANOVA of PC scores
 library(cluster) #for dissimilarity matrix calculation 
 library(MASS) #for 95% CI ellipse overlap
+library(scales) #for scaling axes in discussion figure
 ```
 
 ```{r Data Import}
@@ -294,6 +295,7 @@ dev.off()
 
 ```{r Mutate PC1 Scores so that Increasing Elongation is Positive}
 pPCA_scores_all_species$PC1 <- pPCA_scores_all_species$PC1 * -1 #to make more elongation positive
+
 ```
 
 ```{r Plot PC1 against PC2 for All Species by Water System}
@@ -320,6 +322,9 @@ a1 <- ggplot()+
   geom_point(data=pPCA_scores_all_species, aes(PC1, PC2, shape=haplochromine, colour=water_system), size = 1.50, alpha=0.75)+
   stat_ellipse(data=pPCA_scores_all_species, aes(PC1, PC2, group = water_system, colour=water_system), type = "norm", level =   0.95, linetype = "solid", size=1)+
   scale_colour_manual(values = water_system_colours)+
+  geom_text(data=pPCA_scores_all_species,
+            aes(PC1, PC2, label=species_name),
+            size=1, vjust=-0.5)+
   #geom_point(data = hm_df, aes(x = PC1, y = PC2), 
              #size = 3, colour = '#CC79A7', shape = 17)+ #heterchromis multidens
   xlab("PC1 (Variance explained: 66.40%)")+ #check above for variance explained
@@ -1172,9 +1177,18 @@ ggsave("Figures/Paper/total_count_distribution.pdf", a5, width = 10, height = 10
 #shape_size[vertebral_counts_no_missing$ln_pc_ln_c < 0.00] <- 1.00  
 
 #define dataframe containing mean values for common ancestor (i.e. root)
+#mrca_boxplot <- data.frame(
+  #water_system = "RV",
+  #ln_pc_ln_c = -0.09061365)
+
+
+#define dataframe containing mean values for common ancestor (i.e. root)
 mrca_boxplot <- data.frame(
-  water_system = "RV",
-  ln_pc_ln_c = -0.09061365)
+  water_system = c("RV", "LV", "LM", "LT"),
+  ln_pc_ln_c = c(-0.08908735, -0.323142649, -0.2386646, -0.2085231), #median
+  ci_lower = c(-0.095607436, -0.324280968, -0.238909649, -0.213825726),
+  ci_upper = c(-0.085619858, -0.322004331, -0.236895979, -0.209589204)
+)
 
 #plot the precaudal:caudal ratio by water_system
 b1 <- ggplot(data = vertebral_counts_no_missing, aes(x = water_system, y = ln_pc_ln_c)) +
@@ -1193,6 +1207,12 @@ b1 <- ggplot(data = vertebral_counts_no_missing, aes(x = water_system, y = ln_pc
   geom_hline(yintercept = 0.00, linetype = "dashed", colour = 'black', size = 0.75)+
   #geom_point(data = mrca_boxplot, aes(x = water_system, y = ln_pc_ln_c),
              #size = 3, colour = '#CC79A7', shape = 17)+
+  #CI for root estimates
+  geom_errorbar(data = mrca_boxplot, aes(x = water_system, ymin = ci_lower, ymax = ci_upper),
+                width = 0.2, colour = 'black', alpha=0.75)+
+  #mean root points
+  geom_point(data = mrca_boxplot, aes(x = water_system, y = ln_pc_ln_c),
+             size = 4, colour = 'black', shape = 18, alpha=0.75)+ #do after so that point rests on top of line
   xlab("Water System")+
   ylab("ln[Precaudal] - ln[Caudal]")+
   theme_classic()+
@@ -1209,32 +1229,10 @@ ggsave("Figures/Paper/precaudal_caudal_ratio_plot.jpg", b1, dpi=1200, width = 10
 #define dataframe containing mean values for common ancestor (i.e. root)
 mrca_boxplot <- data.frame(
   water_system = c("RV", "LV", "LM", "LT"),
-  total_count = c(3.3162, 3.389095, 3.429392, 3.454106),
-  sd_upper = c(3.3162+0.0317, 3.389095+0.03209378, 3.429392+0.01755014, 3.454106+0.06730421),
-  sd_lower = c(3.3162-0.0317, 3.389095-0.03209378, 3.429392-0.01755014, 3.454106-0.06730421)
-  #total_count = c(3.342846, 3.38835, 3.430447, 3.453824), #median
-  #ci_lower = c(3.339193, 3.388676, 3.429163, 3.453227),
-  #ci_upper = c(3.346499, 3.389514, 3.429622, 3.454986)
+  total_count = c(3.342846, 3.38835, 3.430447, 3.453824), #median
+  ci_lower = c(3.339193, 3.388676, 3.429163, 3.453227),
+  ci_upper = c(3.346499, 3.389514, 3.429622, 3.454986)
 )
-#approximate ±1 vertebra in ln scale
-#intraspecific_band <- data.frame(
-  #water_system = c("RV", "LV", "LM", "LT"),
-  #median = c(3.342846, 3.38835, 3.430447, 3.453824),
-  #lower = c(log(exp(3.342846) - 1), log(exp(3.38835) - 1), log(exp(3.430447) - 1), log(exp(3.453824) - 1)),
-  #upper = c(log(exp(3.342846) + 1), log(exp(3.38835) + 1), log(exp(3.430447) + 1), log(exp(3.453824) + 1))
-#)
-
-#intraspecific_band$xpos <- as.numeric(factor(intraspecific_band$water_system,
-                                             #levels = c("LV", "LM", "LT", "RV")))
-
-#lacustrine <- 
-  #all_species_data %>%
-  #filter(water_system != 'RV')
-
-#add combined lacustrine box
-#lacustrine_all <- lacustrine %>%
-  #mutate(water_system = "LA")
-#combined_data <- bind_rows(vertebral_counts_no_missing, lacustrine_all)
 
 #recode factors so that order is correct
 #combined_data$water_system <- factor(combined_data$water_system, 
@@ -1250,8 +1248,8 @@ b2 <- ggplot(data = vertebral_counts_no_missing, aes(x = water_system, y = total
   #geom_rect(data = subset(intraspecific_band, !is.na(lower)),
           #aes(xmin = xpos - 0.3, xmax = xpos + 0.3, ymin = lower, ymax = upper),
           #fill = "black", alpha = 0.20, inherit.aes = FALSE)+
-  #SD for root estimates
-  geom_errorbar(data = mrca_boxplot, aes(x = water_system, ymin = sd_lower, ymax = sd_upper),
+  #CI for root estimates
+  geom_errorbar(data = mrca_boxplot, aes(x = water_system, ymin = ci_lower, ymax = ci_upper),
                 width = 0.2, colour = 'black', alpha=0.75)+
   #mean root points
   geom_point(data = mrca_boxplot, aes(x = water_system, y = total_count),
@@ -1265,7 +1263,7 @@ b2 <- ggplot(data = vertebral_counts_no_missing, aes(x = water_system, y = total
 
 b2
 
-ggsave("Figures/Paper/total_count_plot.jpg", b2, dpi=1200, width = 10, height = 10, units = "cm")
+ggsave("Figures/Paper/total_count_plot.jpg", b2, dpi=4000, width = 10, height = 10, units = "cm")
 ```
 
 # Discussion
@@ -1289,25 +1287,11 @@ summary_haplo
 
 
 #calculate fossil z score
-
 z_score_fossil = (0.309 - (-0.257))/0.0825
 z_score_fossil
-
-
 ```
 
-
-
-
-
-
-
-
-
-
-```{r}
-
-
+```{r Discussion Figure (OLD)}
 RV_time <- seq(0, 25, length.out = 100)
 RV <- data.frame(
   time = RV_time,
@@ -1318,7 +1302,7 @@ RV <- data.frame(
 LT_time <- seq(0, 15, length.out = 100)
 LT <- data.frame(
   time = LT_time,
-  variance = 1.5 * LT_time^1.1,   #slow, long-term growth, basically linear BM
+  variance = 1.5 * LT_time^1.2,   #slow, long-term growth, basically linear BM
   lake = "LT"
 )
 
@@ -1340,7 +1324,7 @@ LV <- data.frame(
 df <- rbind(LT, LM, LV, RV)
 
 horrow_show <- ggplot(df, aes(x = time, y = variance, colour = lake))+
-  geom_line(size=1.5)+
+  geom_line(size=3)+
   scale_colour_manual(values = c("RV" = "#CC79A7", "LT"="#0072B2", "LM"="#D55E00", "LV"="#43AA8B"))+
   labs(
     x = "Time since colonisation",
@@ -1352,12 +1336,311 @@ horrow_show <- ggplot(df, aes(x = time, y = variance, colour = lake))+
   theme(legend.position = "none",
         axis.text = element_blank(),
         axis.ticks = element_blank(),
-        axis.title = element_text(size=12, face="bold"))
+        axis.title = element_text(size=24, face="bold"))
 
 horrow_show
 
 
-ggsave("Figures/Paper/discussion_rates_morpho_occupation.jpg", horrow_show, dpi=1200, width = 10, height = 10, units = "cm")
+#ggsave("Figures/Paper/discussion_rates_morpho_occupation.jpg", horrow_show, dpi=4000, width = 25, height = 20, units = "cm")
+```
+
+
+```{r Discussion Figure (NEW)}
+
+curve_df <- data.frame(
+  time = seq(0, 65, length.out = 200)
+)
+
+r0 <- 8
+r_inf <- 1.1
+k <- 0.30
+
+curve_df$rate <- r_inf + (r0 - r_inf) * exp(-k * curve_df$time)
+curve_df$occupation <- 8 * (1 - exp(-0.085 * curve_df$time))
+
+radiations <- data.frame(
+  lake = c("RV", "LT", "LM", "LV"),
+  time = c(61, 12, 1.75, 0.25)
+)
+
+radiations$rate <- r_inf + (r0 - r_inf) * exp(-k * radiations$time)
+radiations$occupation <- 8 * (1 - exp(-0.085 * radiations$time))
+
+# LT point value
+lt_occ <- radiations$occupation[radiations$lake == "LT"][1]
+
+# NEW curve: identical shape, lower asymptote
+curve_df$occupation_lt <- lt_occ * (1 - exp(-0.1724 * curve_df$time))
+
+# rescale occupation onto the same y-space as rate for plotting
+rate_rng <- range(curve_df$rate)
+occ_rng  <- range(curve_df$occupation)
+
+curve_df$occupation_y    <- rescale(curve_df$occupation, to = rate_rng, from = occ_rng)
+curve_df$occupation_lt_y <- rescale(curve_df$occupation_lt, to = rate_rng, from = occ_rng)
+radiations$occupation_y  <- rescale(radiations$occupation, to = rate_rng, from = occ_rng)
+radiations$occupation_lt_y <- rescale(lt_occ * (1 - exp(-0.1724 * radiations$time)), to = rate_rng, from = occ_rng)
+
+# split points so LT appears only on the third curve
+radiations_no_lt <- subset(radiations, lake != "LT")
+lt_point <- subset(radiations, lake == "LT")
+
+death_freedom <- ggplot() +
+  geom_line(
+    data = curve_df,
+    aes(x = time, y = rate),
+    size = 1.5, colour = "black", linetype = "solid"
+  ) +
+  geom_line(
+    data = curve_df,
+    aes(x = time, y = occupation_y),
+    size = 1.5, colour = "black", linetype = "11"
+  ) +
+  geom_line(
+    data = subset(curve_df, time > 8),
+    aes(x = time, y = occupation_lt_y),
+    size = 1.5,
+    colour = "#0072B2",
+    linetype = "11"
+  ) +
+  geom_point(
+    data = radiations,
+    aes(x = time, y = rate, colour = lake),
+    size = 5
+  ) +
+  geom_point(
+    data = radiations_no_lt,
+    aes(x = time, y = occupation_y, colour = lake),
+    size = 6,
+    shape = 18
+  ) +
+  geom_point(
+    data = lt_point,
+    aes(x = time, y = occupation_lt_y, colour = lake),
+    size = 6,
+    shape = 18
+  ) +
+  scale_colour_manual(values = c(
+    "RV" = "#CC79A7",
+    "LT" = "#0072B2",
+    "LM" = "#D55E00",
+    "LV" = "#43AA8B"
+  )) +
+  scale_y_continuous(
+    name = NULL,
+    sec.axis = sec_axis(
+      ~ rescale(., to = occ_rng, from = rate_rng),
+      name = NULL
+    )
+  ) +
+  labs(x = "Time since colonisation (myrs)", colour = "Lake") +
+  theme_classic() +
+  theme(
+    legend.position = "none",
+    axis.text.x = element_text(size = 12),
+    axis.ticks.x = element_line(),
+    axis.text.y = element_blank(),
+    axis.ticks.y = element_blank(),
+    axis.title.y = element_blank(),
+    axis.title.y.right = element_blank(),
+    axis.line.y = element_blank(),
+    axis.line.y.right = element_blank(),
+    axis.title.x = element_text(size = 12, face = "bold")
+  )
+
+death_freedom
+
+ggsave("Figures/Paper/discussion_shared_trajectory.jpg", death_freedom, dpi=2000, width = 10, height = 10, units = "cm")
+```
+
+```{r}
+
+library(patchwork)
+
+# Observed data
+df <- data.frame(
+  stage = c("lv", "lm", "lt", "rv"),
+  time = c(1.2e5, 1e6, 1.2e7, 6.1e7),
+  rate = c(0.065, 0.0055, 0.000296, 0.000204),
+  morphospace = c(13.68, 34.70, 56.00, 100.00)
+)
+
+df$time_myr <- df$time / 1e6
+
+# Force LV to be exactly 0.10 Myr
+df$time_myr[df$stage == "lv"] <- 0.1
+
+x_breaks <- c(0.1, 1, 10, 100)
+x_labels <- c("0.1", "1", "10", "100")
+
+# Top panel: stochastic rate
+p_rate <- ggplot(df, aes(x = time_myr, y = rate)) +
+  geom_point(aes(colour = stage), size = 4) +
+  scale_x_log10(
+    breaks = x_breaks,
+    labels = x_labels,
+    limits = c(0.1, 100)
+  ) +
+  scale_y_log10(
+   name = expression(bold(Stochastic~rate~(sigma^2))),
+    breaks = c(1e-4, 1e-3, 1e-2, 1e-1),
+    labels = c("0.0001", "0.001", "0.01", "0.10"),
+    limits = c(1e-4, 1e-1)
+  ) +
+  scale_colour_manual(values = c(
+    "rv" = "#CC79A7",
+    "lt" = "#0072B2",
+    "lm" = "#D55E00",
+    "lv" = "#43AA8B"
+  )) +
+  annotation_logticks(sides = "bl") +
+  theme_classic() +
+  theme(
+    legend.position = "none",
+    axis.title.x = element_blank(),
+    axis.text.x = element_blank(),
+    axis.ticks.x = element_blank(),
+    axis.title.y = element_text(face = "bold")
+  )
+
+# Bottom panel: morphospace occupation
+p_morph <- ggplot(df, aes(x = time_myr, y = morphospace)) +
+  geom_point(aes(colour = stage), size = 4) +
+  scale_x_log10(
+    name = "Time since colonisation (myrs)",
+    breaks = x_breaks,
+    labels = x_labels,
+    limits = c(0.1, 100)
+  ) +
+  scale_colour_manual(values = c(
+    "rv" = "#CC79A7",
+    "lt" = "#0072B2",
+    "lm" = "#D55E00",
+    "lv" = "#43AA8B"
+  )) +
+  scale_y_continuous(
+    name = "Morphospace occupation (%)",
+    breaks = c(0, 25, 50, 75, 100, 125, 150),
+    limits = c(0, 150)
+  ) +
+  annotation_logticks(sides = "b") +
+  theme_classic() +
+  theme(
+    legend.position = "none",
+    axis.title.x = element_text(face = "bold"),
+    axis.title.y = element_text(face = "bold")
+  )
+
+death_freedom <- p_rate / p_morph
+
+death_freedom
+
+ggsave(
+  "Figures/Paper/discussion_shared_trajectory.jpg",
+  death_freedom,
+  dpi = 2000,
+  width = 10,
+  height = 12,
+  units = "cm"
+)
+```
+
+```{r}
+
+# Data
+df <- data.frame(
+  stage = c("lv", "lm", "lt", "rv"),
+  time = c(1.2e5, 1e6, 1.2e7, 6.1e7),
+  rate = c(0.067602, 0.005027, 0.000296, 0.000204)
+)
+
+df$time_myr <- df$time / 1e6
+
+rv <- subset(df, stage == "rv")
+lt <- subset(df, stage == "lt")
+lv <- subset(df, stage == "lv")
+
+# Hand-tuned piecewise EB parameters
+r_lv <- 0.07       # starting rate near LV
+r_lt <- 0.00030    # value at LT where the curves join
+r_inf <- 0.00015   # late plateau near RV
+
+k1 <- 0.45        # early decline speed
+k2 <- 0.08        # late decline speed
+
+# Curve segment 1: LV -> LT
+curve1 <- data.frame(
+  time = 10^seq(log10(0.01), log10(lt$time_myr), length.out = 1000)
+)
+curve1$rate_curve <- r_lt + (r_lv - r_lt) * exp(-k1 * curve1$time)
+
+# Curve segment 2: LT -> RV
+curve2 <- data.frame(
+  time = 10^seq(log10(lt$time_myr), log10(62), length.out = 1000)
+)
+curve2$rate_curve <- r_inf + (r_lt - r_inf) * exp(-k2 * (curve2$time - lt$time_myr))
+
+ggplot() +
+  geom_line(
+    data = curve1,
+    aes(x = time, y = rate_curve),
+    linewidth = 1.3,
+    colour = "black"
+  ) +
+  geom_line(
+    data = curve2,
+    aes(x = time, y = rate_curve),
+    linewidth = 1.3,
+    colour = "black"
+  ) +
+  geom_segment(
+    data = rv,
+    aes(x = min(curve1$time), xend = time_myr, y = rate, yend = rate),
+    linetype = "11",
+    colour = "#CC79A7",
+    linewidth = 1
+  ) +
+  geom_segment(
+    data = lt,
+    aes(x = min(curve1$time), xend = time_myr, y = rate, yend = rate),
+    linetype = "11",
+    colour = "#0072B2",
+    linewidth = 1
+  ) +
+  geom_point(
+    data = df,
+    aes(x = time_myr, y = rate, colour = stage),
+    size = 4
+  ) +
+  scale_x_log10(
+    name = "Time since colonisation (myrs)",
+    breaks = c(0.01, 0.1, 1, 10, 100),
+    labels = label_number(),
+    limits = c(0.01, 100)
+  ) +
+  scale_y_log10(
+    name = "Stochastic rate",
+    limits = c(1e-4, 1e-1),
+    breaks = c(1e-4, 1e-3, 1e-2, 1e-1),
+    labels = c("0.0001", "0.001", "0.01", "0.10")
+  ) +
+  scale_colour_manual(values = c(
+    "rv" = "#CC79A7",
+    "lt" = "#0072B2",
+    "lm" = "#D55E00",
+    "lv" = "#43AA8B"
+  )) +
+  annotation_logticks(sides = "bl") +
+  theme_classic() +
+  theme(
+    legend.position = "none",
+    axis.title.x = element_text(face = "bold"),
+    axis.title.y = element_text(face = "bold")
+  )
+
+
+
+
 ```
 
 ```{r}
@@ -1440,7 +1723,7 @@ kill_me <- a1 +
    theme(legend.position = "none",
    axis.text = element_blank(),   # remove numeric labels
     axis.ticks = element_blank(),  # remove tick marks
-    axis.title = element_text(size = 12, face = "bold"))
+    axis.title = element_text(size = 16, face = "bold"))
 kill_me
 
 ggsave("Figures/Paper/discussion_future_trajectory.jpg", kill_me, dpi=1200, width = 10, height = 10, units = "cm")
