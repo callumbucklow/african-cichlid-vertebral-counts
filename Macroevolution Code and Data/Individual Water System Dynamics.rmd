@@ -1,0 +1,565 @@
+---
+title: "Individual Water System Dynamics Model Fits"
+author: "Callum Bucklow"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r Setup, include=FALSE}
+knitr::opts_chunk$set(message = FALSE) ##Remove messages for all chunks
+knitr::opts_chunk$set(warning = FALSE) ##Remove warnings for all chunks
+```
+
+```{r Libraries}
+# Load the necessary libraries
+library(tidyverse) #data wrangling
+library(tidyr) #data wrangling
+library(dplyr)
+library(ggplot2) #for plotting when I don't want to use Base R
+library(gridExtra) #for ggplot, to plot multiple plots together
+library(fitdistrplus) #for fitting distributions to data
+library(ape) #for phylogeny manipulation and all the rest
+library(phytools) #for various things, including phylogenetic PCA, PGLM etc.
+library(nlme) #for pgls
+library(geiger) #for fitting trait evolution models to phylogenies
+library(OUwie) #for fitting multiple regime OU models to trait evolution models
+library(viridis)
+library(geomorph) #for MANOVA of PC scores
+library(cluster) #for dissimilarity matrix calculation 
+library(MASS) #for 95% CI ellipse overlap
+```
+
+# Lake Malawi
+
+```{r Data Wrangling (Lake Malawi)}
+#import the tree
+all_species_tree <- ape::read.tree("Data/all_species_tree_piscivore_pruned.txt")
+
+#replace underscores with spaces in tip labels
+all_species_tree$tip.label <- gsub("_", " ", all_species_tree$tip.label)
+
+#import the data
+all_species_count_data <- read.csv("Data/all_species_matrix_data_piscivore.csv")
+
+#convert data into matrices and set row names
+rownames(all_species_count_data) <- all_species_count_data$X
+all_species_count_data$X <- NULL
+all_species_count_data <- as.matrix(all_species_count_data)
+
+#import stored data
+all_species_stored_data <- read.csv("Data/all_species_stored_data_piscivore.csv")
+
+#convert matrix count data into dataframe
+all_species_count_data <- as.data.frame(all_species_count_data)
+
+#add species name column
+all_species_count_data$species_name <- 
+  rownames(all_species_count_data)
+
+#join with count data 
+all_species_data <- left_join(all_species_count_data, all_species_stored_data, by='species_name')
+
+#filter data to just those present in Lake Malawi
+lake_malawi <- 
+  all_species_data %>%
+  filter(water_system == 'Lake Malawi')
+
+#prune the tree to just those present in LT (and in dataset)
+lake_malawi_tree <- 
+  keep.tip(all_species_tree, lake_malawi$species_name)
+
+#reorder data frame based on the order of tip labels in the pruned tree
+lake_malawi <- lake_malawi[match(lake_malawi_tree$tip.label, lake_malawi$species_name), ]
+
+#define matrix of Lake Malawi total counts
+lake_malawi_total_count <- lake_malawi$total_count
+lake_malawi_total_count <- as.matrix(lake_malawi_total_count)
+rownames(lake_malawi_total_count) <- lake_malawi$species_name
+
+#name check to make sure everything is good
+geiger::name.check(lake_malawi_tree, lake_malawi_total_count)
+```
+
+```{r Model Fits (Lake Malawi)}
+#set seed
+set.seed(1931)
+
+#set some OU bounds
+ou_bounds <- list(
+  sigsq = c(1e-8, 10),                      
+  alpha = c(1e-6, 10))
+
+#set some EB bounds
+eb_bounds <- list(
+  sigsq = c(1e-8, 10), #10 is insane but who cares I just don't want it to go mental
+  a = c(-1, 4) #this is r scalar parameter
+)
+
+#single optima, rate, selection OU model
+lm_ou <- fitContinuous(lake_malawi_tree, lake_malawi_total_count, model=c("OU"), bounds=ou_bounds)
+
+#acdc model (note set so that r (a) can be negative and positive)
+lm_eb <- fitContinuous(lake_malawi_tree, lake_malawi_total_count, model=c('EB'), bounds=eb_bounds)
+
+lm_ou$res
+lm_eb$res
+
+#single rate BM model
+lm_bm <- fitContinuous(lake_malawi_tree, lake_malawi_total_count, model=c("BM"))
+
+#white noise model (random, no phylogenetic signal)
+lm_white <- fitContinuous(lake_malawi_tree, lake_malawi_total_count, model=c("white"))
+```
+
+```{r AICc Comparisons and Weights (Lake Malawi)}
+#assemble AICc comparison table with Delta AICc and Akaike weights
+
+aicc_vals <- c(
+  ou    = lm_ou$opt$aicc,
+  bm    = lm_bm$opt$aicc,
+  eb    = lm_eb$opt$aicc,
+  white = lm_white$opt$aicc
+)
+
+delta_aicc <- aicc_vals - min(aicc_vals)
+
+rel_lik <- exp(-0.5 * delta_aicc)
+weights <- rel_lik / sum(rel_lik)
+
+aic_table <- data.frame(
+  model  = names(aicc_vals),
+  AICc   = as.numeric(aicc_vals),
+  delta  = as.numeric(delta_aicc),
+  weight = as.numeric(weights)
+)
+
+aic_table <- aic_table[order(aic_table$AICc), ]
+
+print(aic_table)
+```
+
+# Lake Tanganyika
+
+```{r Data Wrangling (Lake Tanganyika)}
+#import the tree
+all_species_tree <- ape::read.tree("Data/all_species_tree_piscivore_pruned.txt")
+
+#replace underscores with spaces in tip labels
+all_species_tree$tip.label <- gsub("_", " ", all_species_tree$tip.label)
+
+#import the data
+all_species_count_data <- read.csv("Data/all_species_matrix_data_piscivore.csv")
+
+#convert data into matrices and set row names
+rownames(all_species_count_data) <- all_species_count_data$X
+all_species_count_data$X <- NULL
+all_species_count_data <- as.matrix(all_species_count_data)
+
+#import stored data
+all_species_stored_data <- read.csv("Data/all_species_stored_data_piscivore.csv")
+
+#convert matrix count data into dataframe
+all_species_count_data <- as.data.frame(all_species_count_data)
+
+#add species name column
+all_species_count_data$species_name <- 
+  rownames(all_species_count_data)
+
+#join with count data 
+all_species_data <- left_join(all_species_count_data, all_species_stored_data, by='species_name')
+
+#filter data to just those present in Lake Tanganyika
+lake_tanganyika <- 
+  all_species_data %>%
+  filter(water_system == 'Lake Tanganyika')
+
+#prune the tree to just those present in LT (and in dataset)
+lake_tanganyika_tree <- 
+  keep.tip(all_species_tree, lake_tanganyika$species_name)
+
+#reorder data frame based on the order of tip labels in the pruned tree
+lake_tanganyika <- lake_tanganyika[match(lake_tanganyika_tree$tip.label, lake_tanganyika$species_name), ]
+
+#define matrix of Lake Tanganyika total counts
+lake_tanganyika_total_count <- lake_tanganyika$total_count
+lake_tanganyika_total_count <- as.matrix(lake_tanganyika_total_count)
+rownames(lake_tanganyika_total_count) <- lake_tanganyika$species_name
+
+#name check to make sure everything is good
+geiger::name.check(lake_tanganyika_tree, lake_tanganyika_total_count)
+```
+
+```{r Model Fits (Lake Tanganyika)}
+#set seed
+set.seed(1931)
+
+#set some OU bounds
+ou_bounds <- list(
+  sigsq = c(1e-8, 10),                      
+  alpha = c(1e-6, 10))
+
+#set some EB bounds
+eb_bounds <- list(
+  sigsq = c(1e-8, 10), #10 is insane but who cares I just don't want it to go mental
+  a = c(-1, 4) #this is r scalar parameter
+)
+
+#single optima, rate, selection OU model
+lt_ou <- fitContinuous(lake_tanganyika_tree, lake_tanganyika_total_count, model=c("OU"), bounds=ou_bounds)
+
+#acdc model (note set so that r (a) can be negative and positive)
+lt_eb <- fitContinuous(lake_tanganyika_tree, lake_tanganyika_total_count, model=c('EB'), bounds=eb_bounds)
+
+#single rate BM model
+lt_bm <- fitContinuous(lake_tanganyika_tree, lake_tanganyika_total_count, model=c("BM"))
+
+#white noise model (random, no phylogenetic signal)
+lt_white <- fitContinuous(lake_tanganyika_tree, lake_tanganyika_total_count, model=c("white"))
+```
+
+```{r AICc Comparisons and Weights (Lake Tanganyika)}
+#assemble AICc comparison table with Delta AICc and Akaike weights
+
+aicc_vals <- c(
+  ou    = lt_ou$opt$aicc,
+  bm    = lt_bm$opt$aicc,
+  eb    = lt_eb$opt$aicc,
+  white = lt_white$opt$aicc
+)
+
+delta_aicc <- aicc_vals - min(aicc_vals)
+
+rel_lik <- exp(-0.5 * delta_aicc)
+weights <- rel_lik / sum(rel_lik)
+
+aic_table <- data.frame(
+  model  = names(aicc_vals),
+  AICc   = as.numeric(aicc_vals),
+  delta  = as.numeric(delta_aicc),
+  weight = as.numeric(weights)
+)
+
+aic_table <- aic_table[order(aic_table$AICc), ]
+
+print(aic_table)
+
+lt_bm
+```
+
+# Lake Victoria
+
+```{r Data Wrangling (Lake Victoria)}
+#import the tree
+all_species_tree <- ape::read.tree("Data/all_species_tree_piscivore_pruned.txt")
+
+#replace underscores with spaces in tip labels
+all_species_tree$tip.label <- gsub("_", " ", all_species_tree$tip.label)
+
+#import the data
+all_species_count_data <- read.csv("Data/all_species_matrix_data_piscivore.csv")
+
+#convert data into matrices and set row names
+rownames(all_species_count_data) <- all_species_count_data$X
+all_species_count_data$X <- NULL
+all_species_count_data <- as.matrix(all_species_count_data)
+
+#import stored data
+all_species_stored_data <- read.csv("Data/all_species_stored_data_piscivore.csv")
+
+#convert matrix count data into dataframe
+all_species_count_data <- as.data.frame(all_species_count_data)
+
+#add species name column
+all_species_count_data$species_name <- 
+  rownames(all_species_count_data)
+
+#join with count data 
+all_species_data <- left_join(all_species_count_data, all_species_stored_data, by='species_name')
+
+#filter data to just those present in Lake Victoria
+lake_victoria <- 
+  all_species_data %>%
+  filter(water_system == 'Lake Victoria')
+
+#prune the tree to just those present in LT (and in dataset)
+lake_victoria_tree <- 
+  keep.tip(all_species_tree, lake_victoria$species_name)
+
+#reorder data frame based on the order of tip labels in the pruned tree
+lake_victoria <- lake_victoria[match(lake_victoria_tree$tip.label, lake_victoria$species_name), ]
+
+#define matrix of Lake Victoria total counts
+lake_victoria_total_count <- lake_victoria$total_count
+lake_victoria_total_count <- as.matrix(lake_victoria_total_count)
+rownames(lake_victoria_total_count) <- lake_victoria$species_name
+
+#name check to make sure everything is good
+geiger::name.check(lake_victoria_tree, lake_victoria_total_count)
+```
+
+```{r Model Fits (Lake Victoria)}
+#set seed
+set.seed(1931)
+
+#set some OU bounds
+ou_bounds <- list(
+  sigsq = c(1e-12, 1000),                      
+  alpha = c(1e-6, 100000)) #probably behaving like white noise anyway
+
+#set some EB bounds
+eb_bounds <- list(
+  sigsq = c(1e-12, 1000), #10 is insane but who cares I just don't want it to go mental
+  a = c(-1, 100) #this is r scalar parameter, increasing (LT and LM max is 4) because LV is extremely shallow
+)
+
+#single optima, rate, selection OU model
+lv_ou <- fitContinuous(lake_victoria_tree, lake_victoria_total_count, model=c("OU"), bounds=ou_bounds)
+
+#acdc model (note set so that r (a) can be negative and positive)
+lv_eb <- fitContinuous(lake_victoria_tree, lake_victoria_total_count, model=c('EB'), bounds=eb_bounds)
+
+#single rate BM model
+lv_bm <- fitContinuous(lake_victoria_tree, lake_victoria_total_count, model=c("BM"))
+
+#white noise model (random, no phylogenetic signal)
+lv_white <- fitContinuous(lake_victoria_tree, lake_victoria_total_count, model=c("white"))
+```
+
+```{r AICc Comparisons and Weights (Lake Victoria)}
+#assemble AICc comparison table with Delta AICc and Akaike weights
+
+aicc_vals <- c(
+  ou    = lv_ou$opt$aicc,
+  bm    = lv_bm$opt$aicc,
+  eb    = lv_eb$opt$aicc,
+  white = lv_white$opt$aicc
+)
+
+delta_aicc <- aicc_vals - min(aicc_vals)
+
+rel_lik <- exp(-0.5 * delta_aicc)
+weights <- rel_lik / sum(rel_lik)
+
+aic_table <- data.frame(
+  model  = names(aicc_vals),
+  AICc   = as.numeric(aicc_vals),
+  delta  = as.numeric(delta_aicc),
+  weight = as.numeric(weights)
+)
+
+aic_table <- aic_table[order(aic_table$AICc), ]
+
+print(aic_table)
+```
+
+# Rivers
+
+```{r Data Wrangling (Rivers)}
+#import the tree
+all_species_tree <- ape::read.tree("Data/all_species_tree_piscivore_pruned.txt")
+
+#replace underscores with spaces in tip labels
+all_species_tree$tip.label <- gsub("_", " ", all_species_tree$tip.label)
+
+#import the data
+all_species_count_data <- read.csv("Data/all_species_matrix_data_piscivore.csv")
+
+#convert data into matrices and set row names
+rownames(all_species_count_data) <- all_species_count_data$X
+all_species_count_data$X <- NULL
+all_species_count_data <- as.matrix(all_species_count_data)
+
+#import stored data
+all_species_stored_data <- read.csv("Data/all_species_stored_data_piscivore.csv")
+
+#convert matrix count data into dataframe
+all_species_count_data <- as.data.frame(all_species_count_data)
+
+#add species name column
+all_species_count_data$species_name <- 
+  rownames(all_species_count_data)
+
+#join with count data 
+all_species_data <- left_join(all_species_count_data, all_species_stored_data, by='species_name')
+
+#filter data to just those present in Riverine
+riverine <- 
+  all_species_data %>%
+  filter(water_system == 'Riverine')
+
+#prune the tree to just those present in LT (and in dataset)
+riverine_tree <- 
+  keep.tip(all_species_tree, riverine$species_name)
+
+#reorder data frame based on the order of tip labels in the pruned tree
+riverine <- riverine[match(riverine_tree$tip.label, riverine$species_name), ]
+
+#define matrix of Riverine total counts
+riverine_total_count <- riverine$total_count
+riverine_total_count <- as.matrix(riverine_total_count)
+rownames(riverine_total_count) <- riverine$species_name
+
+#name check to make sure everything is good
+geiger::name.check(riverine_tree, riverine_total_count)
+```
+
+```{r Model Fits (Rivers)}
+#set seed
+set.seed(1931)
+
+#set some OU bounds
+ou_bounds <- list(
+  sigsq = c(1e-8, 10),                      
+  alpha = c(1e-6, 10))
+
+#set some EB bounds
+eb_bounds <- list(
+  sigsq = c(1e-8, 10), #10 is insane but who cares I just don't want it to go mental
+  a = c(-1, 4) #this is r scalar parameter
+)
+
+#single optima, rate, selection OU model
+rv_ou <- fitContinuous(riverine_tree, riverine_total_count, model=c("OU"), bounds=ou_bounds)
+
+#acdc model (note set so that r (a) can be negative and positive)
+rv_eb <- fitContinuous(riverine_tree, riverine_total_count, model=c('EB'), bounds=eb_bounds)
+
+#single rate BM model
+rv_bm <- fitContinuous(riverine_tree, riverine_total_count, model=c("BM"))
+
+#white noise model (random, no phylogenetic signal)
+rv_white <- fitContinuous(riverine_tree, riverine_total_count, model=c("white"))
+```
+
+```{r AICc Comparisons and Weights (Rivers)}
+#assemble AICc comparison table with Delta AICc and Akaike weights
+
+aicc_vals <- c(
+  ou    = rv_ou$opt$aicc,
+  bm    = rv_bm$opt$aicc,
+  eb    = rv_eb$opt$aicc,
+  white = rv_white$opt$aicc
+)
+
+delta_aicc <- aicc_vals - min(aicc_vals)
+
+rel_lik <- exp(-0.5 * delta_aicc)
+weights <- rel_lik / sum(rel_lik)
+
+aic_table <- data.frame(
+  model  = names(aicc_vals),
+  AICc   = as.numeric(aicc_vals),
+  delta  = as.numeric(delta_aicc),
+  weight = as.numeric(weights)
+)
+
+aic_table <- aic_table[order(aic_table$AICc), ]
+
+print(aic_table)
+```
+
+# Rivers (no Haplochromines)
+
+```{r Data Wrangling (Rivers, no haplo)}
+#import the tree
+all_species_tree <- ape::read.tree("Data/all_species_tree_piscivore_pruned.txt")
+
+#replace underscores with spaces in tip labels
+all_species_tree$tip.label <- gsub("_", " ", all_species_tree$tip.label)
+
+#import the data
+all_species_count_data <- read.csv("Data/all_species_matrix_data_piscivore.csv")
+
+#convert data into matrices and set row names
+rownames(all_species_count_data) <- all_species_count_data$X
+all_species_count_data$X <- NULL
+all_species_count_data <- as.matrix(all_species_count_data)
+
+#import stored data
+all_species_stored_data <- read.csv("Data/all_species_stored_data_piscivore.csv")
+
+#convert matrix count data into dataframe
+all_species_count_data <- as.data.frame(all_species_count_data)
+
+#add species name column
+all_species_count_data$species_name <- 
+  rownames(all_species_count_data)
+
+#join with count data 
+all_species_data <- left_join(all_species_count_data, all_species_stored_data, by='species_name')
+
+#filter data to just those present in Riverine and not including haplochromines
+riverine <- 
+  all_species_data %>%
+  filter(water_system == 'Riverine' & haplochromine == 'Other')
+
+#prune the tree to just those present in LT (and in dataset)
+riverine_tree <- 
+  keep.tip(all_species_tree, riverine$species_name)
+
+#reorder data frame based on the order of tip labels in the pruned tree
+riverine <- riverine[match(riverine_tree$tip.label, riverine$species_name), ]
+
+#define matrix of Riverine total counts
+riverine_total_count <- riverine$total_count
+riverine_total_count <- as.matrix(riverine_total_count)
+rownames(riverine_total_count) <- riverine$species_name
+
+#name check to make sure everything is good
+geiger::name.check(riverine_tree, riverine_total_count)
+```
+```{r Model Fits (Rivers, no haplo)}
+#set seed
+set.seed(1931)
+
+#set some OU bounds
+ou_bounds <- list(
+  sigsq = c(1e-8, 10),                      
+  alpha = c(1e-6, 10))
+
+#set some EB bounds
+eb_bounds <- list(
+  sigsq = c(1e-8, 10), #10 is insane but who cares I just don't want it to go mental
+  a = c(-1, 4) #this is r scalar parameter
+)
+
+#single optima, rate, selection OU model
+rv_ou <- fitContinuous(riverine_tree, riverine_total_count, model=c("OU"), bounds=ou_bounds)
+
+#acdc model (note set so that r (a) can be negative and positive)
+rv_eb <- fitContinuous(riverine_tree, riverine_total_count, model=c('EB'), bounds=eb_bounds)
+
+#single rate BM model
+rv_bm <- fitContinuous(riverine_tree, riverine_total_count, model=c("BM"))
+
+#white noise model (random, no phylogenetic signal)
+rv_white <- fitContinuous(riverine_tree, riverine_total_count, model=c("white"))
+```
+
+```{r AICc Comparisons and Weights (Rivers, no haplo)}
+#assemble AICc comparison table with Delta AICc and Akaike weights
+
+aicc_vals <- c(
+  ou    = rv_ou$opt$aicc,
+  bm    = rv_bm$opt$aicc,
+  eb    = rv_eb$opt$aicc,
+  white = rv_white$opt$aicc
+)
+
+delta_aicc <- aicc_vals - min(aicc_vals)
+
+rel_lik <- exp(-0.5 * delta_aicc)
+weights <- rel_lik / sum(rel_lik)
+
+aic_table <- data.frame(
+  model  = names(aicc_vals),
+  AICc   = as.numeric(aicc_vals),
+  delta  = as.numeric(delta_aicc),
+  weight = as.numeric(weights)
+)
+
+aic_table <- aic_table[order(aic_table$AICc), ]
+
+print(aic_table)
+
+```
