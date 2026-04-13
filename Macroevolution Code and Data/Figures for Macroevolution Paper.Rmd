@@ -1493,6 +1493,7 @@ p_rate <- ggplot(df, aes(x = time_myr, y = rate)) +
     "lm" = "#D55E00",
     "lv" = "#43AA8B"
   )) +
+  geom_vline(xintercept = 19.2541, linetype='dashed')+
   annotation_logticks(sides = "bl") +
   theme_classic() +
   theme(
@@ -1519,10 +1520,11 @@ p_morph <- ggplot(df, aes(x = time_myr, y = morphospace)) +
     "lv" = "#43AA8B"
   )) +
   scale_y_continuous(
-    name = "Morphospace occupation (%)",
+    name = "Disparity (riverine occupation %)",
     breaks = c(0, 25, 50, 75, 100, 125, 150),
     limits = c(0, 150)
   ) +
+  geom_vline(xintercept = 19.2541, linetype='dashed')+
   annotation_logticks(sides = "b") +
   theme_classic() +
   theme(
@@ -1540,7 +1542,7 @@ ggsave(
   death_freedom,
   dpi = 2000,
   width = 10,
-  height = 12,
+  height = 15,
   units = "cm"
 )
 ```
@@ -1637,10 +1639,6 @@ ggplot() +
     axis.title.x = element_text(face = "bold"),
     axis.title.y = element_text(face = "bold")
   )
-
-
-
-
 ```
 
 ```{r}
